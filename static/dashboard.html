@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Terminal</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Make tables bigger and more readable */
+        .panel table {
+            font-size: 14px; /* Increase font size */
+        }
+        .panel th, .panel td {
+            padding: 12px 15px; /* Increase padding */
+        }
+        /* Target only the main position details table in the dropdown for a larger view */
+        .details-card.large-card .details-table {
+            font-size: 15px !important;
+        }
+        .details-card.large-card .details-table th,
+        .details-card.large-card .details-table td {
+            padding: 12px 15px !important;
+        }
+        /* Adjust portfolio layout to stack panels */
+        .portfolio-grid {
+            display: block; /* Override grid to stack panels */
+        }
+        .portfolio-grid .panel {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1>Trading Terminal</h1>
+                <div class="status-indicators">
+                    <div id="ws-status" class="status-indicator disconnected">
+                        <span class="dot"></span>
+                        <span class="text">OFFLINE</span>
+                    </div>
+                    <div id="socket-status" class="status-indicator disconnected">
+                        <span class="dot"></span>
+                        <span class="text">SOCKET</span>
+                    </div>
+                </div>
+            </div>
+            <div class="header-right">
+                <div id="clock" class="clock">00:00:00</div>
+            </div>
+        </header>
+
+        <!-- Summary Bar -->
+        <div class="summary-bar">
+            <div class="summary-item">
+                <label>Total Live PnL</label>
+                <div id="total-pnl-value" class="summary-value neutral">₹0.00</div>
+            </div>
+            <div class="summary-item">
+                <label>Active Trades</label>
+                <div id="active-trades-count" class="summary-value">0</div>
+            </div>
+            <div class="summary-item">
+                <label>Total Premium</label>
+                <div id="total-premium-received" class="summary-value">₹0.00</div>
+            </div>
+            <div class="summary-item">
+                <label>Net Delta</label>
+                <div id="total-net-delta" class="summary-value neutral">0.00</div>
+            </div>
+        </div>
+
+        <!-- Main Tabs -->
+        <div class="main-tabs">
+            <button class="tab-btn active" onclick="switchMainTab('terminal')">Terminal</button>
+            <button class="tab-btn" onclick="switchMainTab('portfolio')">Portfolio</button>
+            <button class="tab-btn" onclick="switchMainTab('automation')">Automation</button>
+        </div>
+
+        <!-- Main Content Grid -->
+        <div id="terminal-view" class="main-tab-content active">
+            <div class="main-grid">
+                <!-- Left Panel: Order Entry & Positions -->
+                <div class="panel-container">
+                    <!-- Order Entry Panel -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Order Entry</h2>
+                        </div>
+                        <div class="panel-content">
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="symbol">Symbol</label>
+                                    <select id="symbol" onchange="loadOptionChain()">
+                                        <option value="NIFTY">NIFTY</option>
+                                        <option value="BANKNIFTY">BANKNIFTY</option>
+                                        <option value="SENSEX">SENSEX</option>
+                                        <option value="FINNIFTY">FINNIFTY</option>
+                                        <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="lots">Lots</label>
+                                    <input type="number" id="lots" value="1" min="1" oninput="updateStraddlePremium()">
+                                </div>
+                                <div class="form-group">
+                                    <label>ATM Strike</label>
+                                    <input type="text" id="atm-strike" readonly value="--">
+                                </div>
+                                <div class="form-group">
+                                    <label>Straddle Premium</label>
+                                    <input type="text" id="straddle-premium" readonly value="--">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Total Premium</label>
+                                <input type="text" id="total-premium" readonly value="--">
+                            </div>
+                            <div class="button-group">
+                                <button class="btn btn-primary" onclick="sellStraddle()">🚀 Sell Straddle</button>
+                                <button class="btn btn-secondary" onclick="loadOptionChain()">🔄 Refresh Chain</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Positions Panel -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Active Positions</h2>
+                            <button class="btn-icon" onclick="fetchStraddles()">🔄</button>
+                        </div>
+                        <div class="panel-content scrollable" id="straddles-display">
+                            <div class="placeholder">No active positions</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Panel: Option Chain & Logs -->
+                <div class="panel-container">
+                    <!-- Option Chain Panel -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Option Chain</h2>
+                            <div class="chain-header-info">
+                                <span id="chain-header-spot">Spot: --</span>
+                                <span id="chain-header-atm">ATM: --</span>
+                                <span id="chain-header-expiry">Expiry: --</span>
+                            </div>
+                        </div>
+                        <div class="panel-content scrollable" id="option-chain-container">
+                            <div class="placeholder">Loading Option Chain...</div>
+                        </div>
+                    </div>
+
+                    <!-- Log Panel -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Event Log</h2>
+                        </div>
+                        <div class="panel-content scrollable" id="log-panel-content">
+                            <div class="log-entry log-info">
+                                <span class="log-timestamp"></span>
+                                <span class="log-level">INFO</span>
+                                <span class="log-message">Terminal initialized. Waiting for connection...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="portfolio-view" class="main-tab-content">
+            <div class="portfolio-grid">
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Trade Details</h2>
+                        <button class="btn-icon" onclick="fetchStraddles(true)">🔄</button>
+                    </div>
+                    <div class="panel-content scrollable" id="portfolio-positions-display">
+                        <div class="placeholder">Loading positions...</div>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Order History (Today)</h2>
+                        <button class="btn-icon" onclick="fetchOrders()">🔄</button>
+                    </div>
+                    <div class="panel-content scrollable" id="portfolio-orders-display">
+                        <div class="placeholder">Loading orders...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="automation-view" class="main-tab-content">
+             <div class="panel">
+                <div class="panel-header">
+                    <h2>🤖 Configuration-Based Build</h2>
+                </div>
+                <div class="panel-content" id="config-build-form">
+                    <div class="form-grid" style="grid-template-columns: repeat(4, 1fr);">
+                        <!-- Column 1 -->
+                        <div class="form-group">
+                            <label for="config-symbol">Symbol</label>
+                            <select id="config-symbol">
+                                <option value="NIFTY">NIFTY</option>
+                                <option value="BANKNIFTY">BANKNIFTY</option>
+                                <option value="SENSEX">SENSEX</option>
+                                <option value="FINNIFTY">FINNIFTY</option>
+                                <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="config-size">Lots</label>
+                            <input type="number" id="config-size" value="1">
+                        </div>
+                         <div class="form-group">
+                            <label for="config-entry-time">Entry Time (HH:MM:SS)</label>
+                            <input type="text" id="config-entry-time" value="09:30:00">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-exit-time">Exit Time (HH:MM:SS)</label>
+                            <input type="text" id="config-exit-time" value="15:10:00">
+                        </div>
+                        <!-- Column 2 -->
+                        <div class="form-group">
+                            <label for="config-sl-bps">SL (bps)</label>
+                            <input type="number" id="config-sl-bps" value="14">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-idv">IDV</label>
+                            <input type="number" step="0.1" id="config-idv" value="11.4">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-idv-divisor">IDV Divisor</label>
+                            <input type="number" id="config-idv-divisor" value="1.5">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-straddle-filter">Straddle Price Filter</label>
+                            <input type="number" id="config-straddle-filter" value="250">
+                        </div>
+                        <!-- Column 3 -->
+                        <div class="form-group">
+                            <label for="config-hedge-div">Hedge Divisor</label>
+                            <input type="number" id="config-hedge-div" value="19">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-straddle-div">Hedge Straddle Divisor</label>
+                            <input type="number" id="config-straddle-div" value="3">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-roll-straddle-div">Roll Straddle Divisor</label>
+                            <input type="number" id="config-roll-straddle-div" value="2">
+                        </div>
+                         <div class="form-group">
+                            <label for="config-hedge-frac">Hedge Fraction</label>
+                            <input type="number" step="0.1" id="config-hedge-frac" value="1.0">
+                        </div>
+                        <!-- Monitor Intervals -->
+                        <div class="form-group">
+                            <label for="config-sl-interval">SL Interval (s)</label>
+                            <input type="number" step="0.1" id="config-sl-interval" value="60" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-hedge-interval">Hedge Interval (s)</label>
+                            <input type="number" step="0.1" id="config-hedge-interval" value="60" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-roll-interval">Roll Interval (s)</label>
+                            <input type="number" step="0.1" id="config-roll-interval" value="60" min="1">
+                        </div>
+                        <!-- Monitor Start Times -->
+                        <div class="form-group">
+                            <label for="config-hedge-start-time">Hedge Start (HH:MM:SS)</label>
+                            <input type="text" id="config-hedge-start-time" placeholder="e.g., 09:45:00">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-sl-start-time">SL Start (HH:MM:SS)</label>
+                            <input type="text" id="config-sl-start-time" placeholder="e.g., 09:35:00">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-roll-start-time">Roll Start (HH:MM:SS)</label>
+                            <input type="text" id="config-roll-start-time" placeholder="e.g., 14:00:00">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-buy-buffer">Buy Buffer (Ticks)</label>
+                            <input type="number" id="config-buy-buffer" value="2" min="0" title="Positive number of ticks to add to the ask price for buy orders (e.g., 2 for NIFTY, 6 for SENSEX).">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-sell-buffer">Sell Buffer (Ticks)</label>
+                            <input type="number" id="config-sell-buffer" value="2" min="0" title="Positive number of ticks to subtract from the bid price for sell orders (e.g., 2 for NIFTY, 6 for SENSEX).">
+                        </div>
+                    </div>
+                    <div class="button-group">
+                        <button class="btn btn-primary" id="btn-config-build">▶️ Start Automated Build</button>
+                        <button class="btn" id="btn-save-config">💾 Save</button>
+                        <button class="btn" id="btn-load-config">📂 Load</button>
+                    </div>
+                    <div id="config-status-content" style="margin-top: 20px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/ui.js"></script>
+    <script src="/static/straddles.js"></script>
+    <script src="/static/orders.js"></script>
+    <script src="/static/config_build.js"></script>
+    <script src="/static/websocket.js"></script>
+    <script src="/static/init.js"></script>
+</body>
+</html>

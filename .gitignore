@@ -1,0 +1,27 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environments
+.env
+env/
+venv/
+
+# Database files
+*.db
+*.sqlite3
+
+# Credentials & Sensitive Config
+# IMPORTANT: Do not commit your actual credentials.
+# Create a cred.py.example with placeholder values.
+cred.py
+config.ini
+
+# IDE and editor directories
+.vscode/
+.idea/
+
+# Test output files
+order_book_response.txt

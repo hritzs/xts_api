@@ -1,0 +1,266 @@
+2026-03-05 11:06:36 [INFO] 🚀 Process for trade ny050326110600b started.
+2026-03-05 11:06:36 [INFO] ✅ Database initialized
+2026-03-05 11:06:36 [INFO] Initialized worker process cache with 154 orders for ny050326110600b.
+2026-03-05 11:06:36 [INFO] ✅ Market Data Client initialized.
+2026-03-05 11:06:36 [INFO] ✅ SLMonitor initialized: ny050326110600b
+2026-03-05 11:06:36 [INFO]    SL BPS: 14.0 (0.14%) of spot price
+2026-03-05 11:06:36 [INFO]    Check Interval: 60.0s
+2026-03-05 11:06:36 [INFO] ✅ RollMonitor initialized: ny050326110600b
+2026-03-05 11:06:36 [INFO]    Check Interval: 60.0s
+2026-03-05 11:06:36 [INFO] ✅ SquareOffMonitor initialized for ny050326110600b at 15:27:00
+2026-03-05 11:06:36 [INFO] ✅ StraddlePriceMonitor initialized: ny050326110600b
+2026-03-05 11:06:36 [INFO] ✅ All monitors initialized for ny050326110600b
+2026-03-05 11:06:36 [INFO] ✅ TradeManager created: ny050326110600b
+2026-03-05 11:06:36 [INFO] 📊 Starting all monitors for new trade: ny050326110600b
+2026-03-05 11:06:36 [INFO] 🛡️ SLMonitor enabled: ny050326110600b
+2026-03-05 11:06:36 [INFO] ✅ HedgeMonitor enabled for ny050326110600b. Checks will be orchestrated.
+2026-03-05 11:06:36 [INFO] 🔄 RollMonitor enabled: ny050326110600b
+2026-03-05 11:06:36 [INFO] ⏹️ SquareOffMonitor enabled: ny050326110600b
+2026-03-05 11:06:36 [INFO] 🎯 StraddlePriceMonitor enabled: ny050326110600b | Initial HWM: 611.80
+2026-03-05 11:06:36 [INFO] 🚀 Connecting to Market Data Service stream at ws://127.0.0.1:8001/ws/data...
+2026-03-05 11:06:36 [INFO] Handshake headers being sent: {'Origin': 'http://127.0.0.1'}
+2026-03-05 11:06:36 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:36 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:36 [INFO] ✅ Connected to Market Data Service real-time stream.
+2026-03-05 11:06:36 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:36 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:36 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:36 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:36 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:36 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:37 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:37 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:37 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:37 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:37 [INFO] Received and updated option chain for NIFTY via WebSocket.
+2026-03-05 11:06:37 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:37 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:37 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:37 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:38 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:38 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:38 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:38 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:38 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:38 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:38 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:38 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:39 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:39 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:39 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:39 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:39 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:39 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:39 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:39 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:40 [INFO] Received and updated option chain for SENSEX via WebSocket.
+2026-03-05 11:06:40 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:40 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:40 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:40 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:40 [INFO] Received and updated option chain for NIFTY via WebSocket.
+2026-03-05 11:06:40 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:40 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:40 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:40 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:41 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:41 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:41 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:41 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:42 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:42 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:42 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:42 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:42 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:42 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:42 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:42 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:43 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:43 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:43 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:43 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:43 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:43 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:43 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:43 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:44 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:44 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:44 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:44 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:44 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:44 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:44 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:44 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:45 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:45 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:45 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:45 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:45 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:45 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:45 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:45 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:46 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:46 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:46 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:46 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:46 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:46 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:46 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:46 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:47 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:47 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:47 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:47 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:47 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:47 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:47 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:47 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:48 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:48 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:48 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:48 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:49 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:49 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:49 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:49 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:49 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:49 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:49 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:49 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:50 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:50 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:50 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:50 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:50 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:50 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:50 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:50 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:51 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:51 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:51 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:51 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:51 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:51 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:51 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:51 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:52 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:52 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:52 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:52 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:52 [WARNING] Snapshot: Invalid or incomplete chain for NIFTY found in cache. Re-fetching from service...
+2026-03-05 11:06:52 [ERROR] ❌ HTTP client for Market Data Service not initialized.
+2026-03-05 11:06:52 [ERROR] Could not determine lot size for ny050326110600b. Falling back to default 65. Hedging may be incorrect.
+2026-03-05 11:06:52 [WARNING] 📸 Snapshot for ny050326110600b aborted this cycle: Spot/chain details not available in cache.
+2026-03-05 11:06:52 [INFO] Received and updated option chain for NIFTY via WebSocket.
+2026-03-05 11:06:53 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:53 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:53 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:53 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:53 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:53 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:53 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:53 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:54 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:54 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:54 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:54 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:54 [INFO] Received and updated option chain for SENSEX via WebSocket.
+2026-03-05 11:06:54 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:54 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:54 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:54 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:55 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:55 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:55 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:55 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:56 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:56 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:56 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:56 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:56 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:56 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:56 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:56 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:57 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:57 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:57 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:57 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:57 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:57 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:57 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:57 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:58 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:58 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:58 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:58 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:58 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:58 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:58 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:58 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:59 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:59 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:59 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:59 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:06:59 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:06:59 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:06:59 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:06:59 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:00 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:00 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:00 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:00 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:01 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:01 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:01 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:01 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:01 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:01 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:01 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:01 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:02 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:02 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:02 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:02 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:02 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:02 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:02 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:02 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:03 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:03 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:03 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:03 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:03 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:03 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:03 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:03 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:04 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:04 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:04 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:04 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:04 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:04 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:04 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:04 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:05 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:05 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:05 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:05 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:05 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:05 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:05 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:05 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:06 [INFO] ⚠️ Using derived lot_size 65 for ny050326110600b snapshot (DB value missing/invalid).
+2026-03-05 11:07:06 [INFO] 🔍 Found 178 orders in DB for trade ny050326110600b via get_orders_by_trade_id.
+2026-03-05 11:07:06 [INFO] Found 178 filled orders for ny050326110600b in DB via get_orders_by_trade_id.
+2026-03-05 11:07:06 [INFO] Found 154 orders in temp cache for ny050326110600b. Merging with DB orders.
+2026-03-05 11:07:06 [INFO] 🛑 Shutting down trade process for ny050326110600b.
+2026-03-05 11:07:06 [INFO] 🛑 Stopping all monitors for trade: ny050326110600b
+2026-03-05 11:07:06 [INFO] 🛑 SLMonitor disabled: ny050326110600b
+2026-03-05 11:07:06 [INFO] 🛑 HedgeMonitor disabled for ny050326110600b.
+2026-03-05 11:07:06 [INFO] 🛑 RollMonitor disabled: ny050326110600b
+2026-03-05 11:07:06 [INFO] 🛑 SquareOffMonitor disabled for ny050326110600b
+2026-03-05 11:07:06 [INFO] 🛑 StraddlePriceMonitor disabled: ny050326110600b
+2026-03-05 11:07:06 [INFO] ✅ Market Data Client closed.
+2026-03-05 11:07:06 [INFO] 🔒 Database closed
+2026-03-05 11:07:06 [INFO] ✅ Process for ny050326110600b finished.
+2026-03-05 11:07:06 [INFO] Price sync loop cancelled.
