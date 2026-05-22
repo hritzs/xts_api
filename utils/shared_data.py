@@ -41,6 +41,7 @@ class SharedDataManager:
             # Create a managed dictionary for option chains
             self.manager = Manager()
             self.option_chains_proxy = self.manager.dict()
+            self.trade_data_cache_proxy = self.manager.dict()
 
         else:
             # Child process attaches to existing shared memory

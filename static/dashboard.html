@@ -9,32 +9,18 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        /* Make tables bigger and more readable */
-        .panel table {
-            font-size: 14px; /* Increase font size */
-        }
-        .panel th, .panel td {
-            padding: 12px 15px; /* Increase padding */
-        }
-        /* Target only the main position details table in the dropdown for a larger view */
-        .details-card.large-card .details-table {
-            font-size: 15px !important;
-        }
+        .panel table { font-size: 14px; }
+        .panel th, .panel td { padding: 12px 15px; }
+        .details-card.large-card .details-table { font-size: 15px !important; }
         .details-card.large-card .details-table th,
-        .details-card.large-card .details-table td {
-            padding: 12px 15px !important;
-        }
-        /* Adjust portfolio layout to stack panels */
-        .portfolio-grid {
-            display: block; /* Override grid to stack panels */
-        }
-        .portfolio-grid .panel {
-            margin-bottom: 20px;
-        }
+        .details-card.large-card .details-table td { padding: 12px 15px !important; }
+        .portfolio-grid { display: block; }
+        .portfolio-grid .panel { margin-bottom: 20px; }
     </style>
 </head>
 <body>
     <div class="container">
+
         <!-- Header -->
         <header class="header">
             <div class="header-left">
@@ -82,16 +68,14 @@
             <button class="tab-btn" onclick="switchMainTab('automation')">Automation</button>
         </div>
 
-        <!-- Main Content Grid -->
+        <!-- Terminal View -->
         <div id="terminal-view" class="main-tab-content active">
             <div class="main-grid">
-                <!-- Left Panel: Order Entry & Positions -->
+
+                <!-- Left: Order Entry + Positions -->
                 <div class="panel-container">
-                    <!-- Order Entry Panel -->
                     <div class="panel">
-                        <div class="panel-header">
-                            <h2>Order Entry</h2>
-                        </div>
+                        <div class="panel-header"><h2>Order Entry</h2></div>
                         <div class="panel-content">
                             <div class="form-grid">
                                 <div class="form-group">
@@ -105,8 +89,12 @@
                                     </select>
                                 </div>
                                 <div class="form-group">
-                                    <label for="lots">Lots</label>
-                                    <input type="number" id="lots" value="1" min="1" oninput="updateStraddlePremium()">
+                                    <label for="lots">Approx. Qty</label>
+                                    <input type="number" id="lots" value="25" min="1" oninput="debouncedRoundQuantity('lots')">
+                                </div>
+                                <div class="form-group">
+                                    <label for="manual_lots_per_call" title="Quantity per broker call">Qty Per Call</label>
+                                    <input type="number" id="manual_lots_per_call" value="25" min="1" oninput="debouncedRoundQuantity('manual_lots_per_call')">
                                 </div>
                                 <div class="form-group">
                                     <label>ATM Strike</label>
@@ -118,17 +106,35 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label>Total Premium</label>
+                                 <label for="total-premium">Total Premium</label>
                                 <input type="text" id="total-premium" readonly value="--">
                             </div>
                             <div class="button-group">
-                                <button class="btn btn-primary" onclick="sellStraddle()">🚀 Sell Straddle</button>
+                                <button class="btn btn-primary" onclick="sellStraddle()">🚀 Sell ATM Straddle</button>
                                 <button class="btn btn-secondary" onclick="loadOptionChain()">🔄 Refresh Chain</button>
+                            </div>
+                            <hr style="border-color:#444;margin:20px 0;">
+                            <h3 style="margin-top:0;margin-bottom:15px;text-align:center;color:#ccc;">Custom Strangle / Straddle</h3>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="custom-ce-strike">Custom CE Strike</label>
+                                    <input type="number" id="custom-ce-strike" placeholder="e.g., 22500" step="50">
+                                </div>
+                                <div class="form-group">
+                                    <label for="custom-pe-strike">Custom PE Strike</label>
+                                    <input type="number" id="custom-pe-strike" placeholder="e.g., 22400" step="50">
+                                </div>
+                            </div>
+                            <div class="form-group checkbox-group" style="justify-content:center;margin-top:10px;margin-bottom:15px;">
+                                <input type="checkbox" id="custom-delta-neutral" checked>
+                                <label for="custom-delta-neutral">Delta Neutral</label>
+                            </div>
+                            <div class="button-group">
+                                <button class="btn btn-success" onclick="sellCustomStraddle()">🎯 Sell Custom</button>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Positions Panel -->
                     <div class="panel">
                         <div class="panel-header">
                             <h2>Active Positions</h2>
@@ -140,16 +146,17 @@
                     </div>
                 </div>
 
-                <!-- Right Panel: Option Chain & Logs -->
+                <!-- Right: Option Chain + Logs -->
                 <div class="panel-container">
-                    <!-- Option Chain Panel -->
                     <div class="panel">
                         <div class="panel-header">
                             <h2>Option Chain</h2>
                             <div class="chain-header-info">
-                                <span id="chain-header-spot">Spot: --</span>
-                                <span id="chain-header-atm">ATM: --</span>
-                                <span id="chain-header-expiry">Expiry: --</span>
+                                <span id="chain-header-spot">Spot: <span id="chain-spot-value">--</span></span>
+                                <span id="chain-header-synthetic-spot" style="margin-left:15px;">Syn.Fut: <span id="chain-synfut-value">--</span></span>
+                                <span id="chain-header-atm">ATM: <span id="chain-atm-value">--</span></span>
+                                <span id="chain-header-expiry">Expiry: <span id="chain-expiry-value">--</span></span>
+                                <span id="chain-header-var">VaR(95%): <span id="chain-var-value">--</span>
                             </div>
                         </div>
                         <div class="panel-content scrollable" id="option-chain-container">
@@ -157,11 +164,8 @@
                         </div>
                     </div>
 
-                    <!-- Log Panel -->
                     <div class="panel">
-                        <div class="panel-header">
-                            <h2>Event Log</h2>
-                        </div>
+                        <div class="panel-header"><h2>Event Log</h2></div>
                         <div class="panel-content scrollable" id="log-panel-content">
                             <div class="log-entry log-info">
                                 <span class="log-timestamp"></span>
@@ -171,9 +175,11 @@
                         </div>
                     </div>
                 </div>
+
             </div>
         </div>
 
+        <!-- Portfolio View -->
         <div id="portfolio-view" class="main-tab-content">
             <div class="portfolio-grid">
                 <div class="panel">
@@ -197,14 +203,12 @@
             </div>
         </div>
 
+        <!-- Automation View -->
         <div id="automation-view" class="main-tab-content">
-             <div class="panel">
-                <div class="panel-header">
-                    <h2>🤖 Configuration-Based Build</h2>
-                </div>
+            <div class="panel">
+                <div class="panel-header"><h2>🤖 Configuration-Based Build</h2></div>
                 <div class="panel-content" id="config-build-form">
-                    <div class="form-grid" style="grid-template-columns: repeat(4, 1fr);">
-                        <!-- Column 1 -->
+                    <div class="form-grid" style="grid-template-columns:repeat(4,1fr);">
                         <div class="form-group">
                             <label for="config-symbol">Symbol</label>
                             <select id="config-symbol">
@@ -216,10 +220,22 @@
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="config-size">Lots</label>
-                            <input type="number" id="config-size" value="1">
+                            <label for="config-size">Approx. Qty</label>
+                            <input type="number" id="config-size" value="77" oninput="debouncedRoundQuantity('config-size')">
                         </div>
-                         <div class="form-group">
+                        <div class="form-group">
+                            <label for="config-ce-strike">CE Strike (Optional)</label>
+                            <input type="number" id="config-ce-strike" placeholder="e.g., 22500">
+                        </div>
+                        <div class="form-group">
+                            <label for="config-pe-strike">PE Strike (Optional)</label>
+                            <input type="number" id="config-pe-strike" placeholder="e.g., 22400">
+                        </div>
+                        <div class="form-group">
+                            <label for="auto_lots_per_call">Qty Per Call</label>
+                            <input type="number" id="auto_lots_per_call" value="77" min="1" oninput="debouncedRoundQuantity('auto_lots_per_call')">
+                        </div>
+                        <div class="form-group">
                             <label for="config-entry-time">Entry Time (HH:MM:SS)</label>
                             <input type="text" id="config-entry-time" value="09:30:00">
                         </div>
@@ -227,7 +243,6 @@
                             <label for="config-exit-time">Exit Time (HH:MM:SS)</label>
                             <input type="text" id="config-exit-time" value="15:10:00">
                         </div>
-                        <!-- Column 2 -->
                         <div class="form-group">
                             <label for="config-sl-bps">SL (bps)</label>
                             <input type="number" id="config-sl-bps" value="14">
@@ -244,7 +259,10 @@
                             <label for="config-straddle-filter">Straddle Price Filter</label>
                             <input type="number" id="config-straddle-filter" value="250">
                         </div>
-                        <!-- Column 3 -->
+                        <div class="form-group">
+                            <label for="config-straddle-stop-pct" title="Stop building if straddle price drops by this % of the filter price.">Straddle Stop %</label>
+                            <input type="number" id="config-straddle-stop-pct" value="1.0" step="0.1">
+                        </div>
                         <div class="form-group">
                             <label for="config-hedge-div">Hedge Divisor</label>
                             <input type="number" id="config-hedge-div" value="19">
@@ -257,11 +275,10 @@
                             <label for="config-roll-straddle-div">Roll Straddle Divisor</label>
                             <input type="number" id="config-roll-straddle-div" value="2">
                         </div>
-                         <div class="form-group">
+                        <div class="form-group">
                             <label for="config-hedge-frac">Hedge Fraction</label>
                             <input type="number" step="0.1" id="config-hedge-frac" value="1.0">
                         </div>
-                        <!-- Monitor Intervals -->
                         <div class="form-group">
                             <label for="config-sl-interval">SL Interval (s)</label>
                             <input type="number" step="0.1" id="config-sl-interval" value="60" min="1">
@@ -274,7 +291,6 @@
                             <label for="config-roll-interval">Roll Interval (s)</label>
                             <input type="number" step="0.1" id="config-roll-interval" value="60" min="1">
                         </div>
-                        <!-- Monitor Start Times -->
                         <div class="form-group">
                             <label for="config-hedge-start-time">Hedge Start (HH:MM:SS)</label>
                             <input type="text" id="config-hedge-start-time" placeholder="e.g., 09:45:00">
@@ -288,12 +304,12 @@
                             <input type="text" id="config-roll-start-time" placeholder="e.g., 14:00:00">
                         </div>
                         <div class="form-group">
-                            <label for="config-buy-buffer">Buy Buffer (Ticks)</label>
-                            <input type="number" id="config-buy-buffer" value="2" min="0" title="Positive number of ticks to add to the ask price for buy orders (e.g., 2 for NIFTY, 6 for SENSEX).">
+                            <label for="config-buy-buffer">Buy Buffer (Rupees buffer by which u want to hit in market)</label>
+                            <input type="number" id="config-buy-buffer" value="2" min="0">
                         </div>
                         <div class="form-group">
-                            <label for="config-sell-buffer">Sell Buffer (Ticks)</label>
-                            <input type="number" id="config-sell-buffer" value="2" min="0" title="Positive number of ticks to subtract from the bid price for sell orders (e.g., 2 for NIFTY, 6 for SENSEX).">
+                            <label for="config-sell-buffer">Sell Buffer (Rupees buffer by which u want to hit in market)</label>
+                            <input type="number" id="config-sell-buffer" value="2" min="0">
                         </div>
                     </div>
                     <div class="button-group">
@@ -301,18 +317,20 @@
                         <button class="btn" id="btn-save-config">💾 Save</button>
                         <button class="btn" id="btn-load-config">📂 Load</button>
                     </div>
-                    <div id="config-status-content" style="margin-top: 20px;"></div>
+                    <div id="config-status-content" style="margin-top:20px;"></div>
                 </div>
             </div>
         </div>
+
     </div>
 
-    <!-- Scripts -->
-    <script src="/static/ui.js"></script>
-    <script src="/static/straddles.js"></script>
-    <script src="/static/orders.js"></script>
-    <script src="/static/config_build.js"></script>
-    <script src="/static/websocket.js"></script>
-    <script src="/static/init.js"></script>
+    <!-- ✅ ?v=4 busts browser cache — increment whenever JS changes -->
+    <script src="/static/ui.js?v=4"></script>
+    <script src="/static/straddles.js?v=4"></script>
+    <script src="/static/orders.js?v=4"></script>
+    <script src="/static/config_build.js?v=4"></script>
+    <script src="/static/option_chain.js?v=4"></script>
+    <script src="/static/websocket.js?v=4"></script>
+    <script src="/static/init.js?v=4"></script>
 </body>
 </html>

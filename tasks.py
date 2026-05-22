@@ -38,7 +38,18 @@ async def update_option_chain_cache_loop():
                     None, 
                     get_option_chain, 
                     symbol, 
-                    5 # strike_range
+                    15 # strike_range
+                )
+                chain = state.option_chains.get(symbol)
+                # After: state.option_chains[symbol] = chain
+                if chain and hasattr(state, 'chain_shms'):
+                    if symbol not in state.chain_shms:
+                        from core.shared_memory import ChainSHM
+                        state.chain_shms[symbol] = ChainSHM(symbol, create=True)
+                    state.chain_shms[symbol].write(chain)
+
+                if chain and hasattr(state, 'tick_publisher'):
+                    asyncio.create_task(state.tick_publisher.publish(symbol)
                 )
             
             # Wait for the next update cycle

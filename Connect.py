@@ -214,7 +214,7 @@ class XTSConnect(XTSCommon):
                                            response['result']['isInvestorClient'])
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_order_book(self, clientID=None):
         """Request Order book gives states of all the orders placed by an user"""
@@ -225,7 +225,7 @@ class XTSConnect(XTSCommon):
             response = self._get("order.status", params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 		
     def get_dealer_orderbook(self, clientID=None):
         """Request Order book gives states of all the orders placed by an user"""
@@ -236,7 +236,7 @@ class XTSConnect(XTSCommon):
             response = self._get("order.dealer.status", params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def place_order(self,
                     exchangeSegment,
@@ -275,7 +275,7 @@ class XTSConnect(XTSCommon):
             response = self._post('order.place', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
         
     def place_bracketorder(self,
                     exchangeSegment,
@@ -310,9 +310,8 @@ class XTSConnect(XTSCommon):
             }
             response = self._post('bracketorder.place', json.dumps(params))
             # print(response)
-            return response
-        except Exception as e:
-            return response['description']
+            return response 
+        except Exception as e: return {'type': 'error', 'description': str(e)}
 
     def get_profile(self, clientID=None):
         """Using session token user can access his profile stored with the broker, it's possible to retrieve it any
@@ -325,7 +324,7 @@ class XTSConnect(XTSCommon):
             response = self._get('user.profile', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_balance(self, clientID=None):
         """Get Balance API call grouped under this category information related to limits on equities, derivative,
@@ -338,7 +337,7 @@ class XTSConnect(XTSCommon):
                 response = self._get('user.balance', params)
                 return response
             except Exception as e:
-                return response['description']
+                return {'type': 'error', 'description': str(e)}
         else:
             print("Balance : Balance API available for retail API users only, dealers can watch the same on dealer "
                   "terminal")
@@ -378,7 +377,7 @@ class XTSConnect(XTSCommon):
             response = self._put('order.modify', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_trade(self, clientID=None):
         """Trade book returns a list of all trades executed on a particular day , that were placed by the user . The
@@ -390,7 +389,7 @@ class XTSConnect(XTSCommon):
             response = self._get('trades', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_dealer_tradebook(self, clientID=None):
         """Trade book returns a list of all trades executed on a particular day , that were placed by the user . The
@@ -402,7 +401,7 @@ class XTSConnect(XTSCommon):
             response = self._get('dealer.trades', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 		
     def get_holding(self, clientID=None):
         """Holdings API call enable users to check their long term holdings with the broker."""
@@ -414,7 +413,7 @@ class XTSConnect(XTSCommon):
             response = self._get('portfolio.holdings', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def bracketorder_cancel(self, appOrderID, clientID=None):
         """This API can be called to cancel any open order of the user by providing correct appOrderID matching with
@@ -426,7 +425,7 @@ class XTSConnect(XTSCommon):
             response = self._delete('bracketorder.cancel', params)
             return response
         except Exception as e:
-            return response['description']   
+            return {'type': 'error', 'description': str(e)}   
 		
     def get_dealerposition_netwise(self, clientID=None):
         """The positions API positions by net. Net is the actual, current net position portfolio."""
@@ -437,7 +436,7 @@ class XTSConnect(XTSCommon):
             response = self._get('portfolio.dealerpositions', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
 
            
@@ -452,7 +451,7 @@ class XTSConnect(XTSCommon):
             response = self._get('portfolio.dealerpositions', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 		
     def get_position_daywise(self, clientID=None):
 	    
@@ -466,7 +465,7 @@ class XTSConnect(XTSCommon):
             response = self._get('portfolio.positions', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_position_netwise(self, clientID=None):
         """The positions API positions by net. Net is the actual, current net position portfolio."""
@@ -477,7 +476,7 @@ class XTSConnect(XTSCommon):
             response = self._get('portfolio.positions', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def convert_position(self, exchangeSegment, exchangeInstrumentID, targetQty, isDayWise, oldProductType,
                          newProductType, clientID=None):
@@ -497,7 +496,7 @@ class XTSConnect(XTSCommon):
             response = self._put('portfolio.positions.convert', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def cancel_order(self, appOrderID, orderUniqueIdentifier, clientID=None):
         """This API can be called to cancel any open order of the user by providing correct appOrderID matching with
@@ -509,7 +508,7 @@ class XTSConnect(XTSCommon):
             response = self._delete('order.cancel', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
         
     def cancelall_order(self, exchangeSegment, exchangeInstrumentID):
         """This API can be called to cancel all open order of the user by providing exchange segment and exchange instrument ID """
@@ -520,7 +519,7 @@ class XTSConnect(XTSCommon):
             response = self._post('order.cancelall', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']    
+            return {'type': 'error', 'description': str(e)}    
 
     def place_cover_order(self, exchangeSegment, exchangeInstrumentID, orderSide,orderType, orderQuantity, disclosedQuantity,
                           limitPrice, stopPrice, orderUniqueIdentifier, clientID=None):
@@ -538,7 +537,7 @@ class XTSConnect(XTSCommon):
             response = self._post('order.place.cover', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def exit_cover_order(self, appOrderID, clientID=None):
         """Exit Cover API is a functionality to enable user to easily exit an open stoploss order by converting it
@@ -551,7 +550,7 @@ class XTSConnect(XTSCommon):
             response = self._put('order.exit.cover', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def squareoff_position(self, exchangeSegment, exchangeInstrumentID, productType, squareoffMode,
                            positionSquareOffQuantityType, squareOffQtyValue, blockOrderSending, cancelOrders,
@@ -571,7 +570,7 @@ class XTSConnect(XTSCommon):
             response = self._put('portfolio.squareoff', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_order_history(self, appOrderID, clientID=None):
         """Order history will provide particular order trail chain. This indicate the particular order & its state
@@ -584,7 +583,7 @@ class XTSConnect(XTSCommon):
             response = self._get('order.history', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def interactive_logout(self, clientID=None):
         """This call invalidates the session token and destroys the API session. After this, the user should go
@@ -596,7 +595,7 @@ class XTSConnect(XTSCommon):
             response = self._delete('user.logout', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     ########################################################################################################
     # Market data API
@@ -615,7 +614,7 @@ class XTSConnect(XTSCommon):
                 self._set_common_variables(response['result']['token'], response['result']['userID'],False)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_config(self):
         try:
@@ -623,7 +622,7 @@ class XTSConnect(XTSCommon):
             response = self._get('market.config', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_quote(self, Instruments, xtsMessageCode, publishFormat):
         try:
@@ -632,7 +631,9 @@ class XTSConnect(XTSCommon):
             response = self._post('market.instruments.quotes', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']
+            # Log the error for better debugging
+            log.error(f"get_quote failed: {e}", exc_info=True)
+            return {'type': 'error', 'description': str(e)}
 
     def send_subscription(self, Instruments, xtsMessageCode):
         try:
@@ -640,8 +641,8 @@ class XTSConnect(XTSCommon):
             response = self._post('market.instruments.subscription', json.dumps(params))
             return response
         except Exception as e:
-            print(e)
-            return response['description']
+            log.error(f"Send subscription error: {e}")
+            return {'type': 'error', 'description': str(e)}
 
     def send_unsubscription(self, Instruments, xtsMessageCode):
         try:
@@ -649,7 +650,7 @@ class XTSConnect(XTSCommon):
             response = self._put('market.instruments.unsubscription', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_master(self, exchangeSegmentList):
         try:
@@ -657,7 +658,7 @@ class XTSConnect(XTSCommon):
             response = self._post('market.instruments.master', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_ohlc(self, exchangeSegment, exchangeInstrumentID, startTime, endTime, compressionValue):
         try:
@@ -670,7 +671,7 @@ class XTSConnect(XTSCommon):
             response = self._get('market.instruments.ohlc', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_series(self, exchangeSegment):
         try:
@@ -678,7 +679,7 @@ class XTSConnect(XTSCommon):
             response = self._get('market.instruments.instrument.series', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_equity_symbol(self, exchangeSegment, series, symbol):
         try:
@@ -687,7 +688,7 @@ class XTSConnect(XTSCommon):
             response = self._get('market.instruments.instrument.equitysymbol', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_expiry_date(self, exchangeSegment, series, symbol):
         try:
@@ -695,7 +696,7 @@ class XTSConnect(XTSCommon):
             response = self._get('market.instruments.instrument.expirydate', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_future_symbol(self, exchangeSegment, series, symbol, expiryDate):
         try:
@@ -703,7 +704,7 @@ class XTSConnect(XTSCommon):
             response = self._get('market.instruments.instrument.futuresymbol', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_option_symbol(self, exchangeSegment, series, symbol, expiryDate, optionType, strikePrice):
         try:
@@ -711,8 +712,7 @@ class XTSConnect(XTSCommon):
                       'optionType': optionType, 'strikePrice': strikePrice}
             response = self._get('market.instruments.instrument.optionsymbol', params)
             return response
-        except Exception as e:
-            return response['description']
+        except Exception as e: return {'type': 'error', 'description': str(e)}
 
     def get_option_type(self, exchangeSegment, series, symbol, expiryDate):
         try:
@@ -720,7 +720,7 @@ class XTSConnect(XTSCommon):
             response = self._get('market.instruments.instrument.optiontype', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def get_index_list(self, exchangeSegment):
         try:
@@ -728,7 +728,7 @@ class XTSConnect(XTSCommon):
             response = self._get('market.instruments.indexlist', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def search_by_instrumentid(self, Instruments):
         try:
@@ -736,7 +736,7 @@ class XTSConnect(XTSCommon):
             response = self._post('market.search.instrumentsbyid', json.dumps(params))
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def search_by_scriptname(self, searchString):
         try:
@@ -744,7 +744,7 @@ class XTSConnect(XTSCommon):
             response = self._get('market.search.instrumentsbystring', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     def marketdata_logout(self):
         try:
@@ -752,7 +752,7 @@ class XTSConnect(XTSCommon):
             response = self._delete('market.logout', params)
             return response
         except Exception as e:
-            return response['description']
+            return {'type': 'error', 'description': str(e)}
 
     ########################################################################################################
     # Common Methods
@@ -796,32 +796,32 @@ class XTSConnect(XTSCommon):
                                         verify=not self.disable_ssl,
                                         timeout=self.timeout)
 
-        except Exception as e:
-            raise e
+            if self.debug:
+                log.debug("Response: {code} {content}".format(code=r.status_code, content=r.content))
 
-        if self.debug:
-            log.debug("Response: {code} {content}".format(code=r.status_code, content=r.content))
+            # Validate the content type.
+            if "json" in r.headers["content-type"]:
+                try:
+                    data = json.loads(r.content.decode("utf8"))
+                except ValueError:
+                    raise ex.XTSDataException("Couldn't parse the JSON response received from the server: {content}".format(
+                        content=r.content))
 
-        # Validate the content type.
-        if "json" in r.headers["content-type"]:
-            try:
-                data = json.loads(r.content.decode("utf8"))
-            except ValueError:
-                raise ex.XTSDataException("Couldn't parse the JSON response received from the server: {content}".format(
+                # api error
+                if data.get("type"):
+
+                    if r.status_code == 400 and data["type"] == "error" and data["description"] == "Invalid Token":
+                        raise ex.XTSTokenException(data["description"])
+
+                    if r.status_code == 400 and data["type"] == "error" and data["description"] == "Bad Request":
+                        message = "Description: " + data["description"] + " errors: " + str(data['result']["errors"])
+                        raise ex.XTSInputException(str(message))
+
+                return data
+            else:
+                raise ex.XTSDataException("Unknown Content-Type ({content_type}) with response: ({content})".format(
+                    content_type=r.headers["content-type"],
                     content=r.content))
 
-            # api error
-            if data.get("type"):
-
-                if r.status_code == 400 and data["type"] == "error" and data["description"] == "Invalid Token":
-                    raise ex.XTSTokenException(data["description"])
-
-                if r.status_code == 400 and data["type"] == "error" and data["description"] == "Bad Request":
-                    message = "Description: " + data["description"] + " errors: " + str(data['result']["errors"])
-                    raise ex.XTSInputException(str(message))
-
-            return data
-        else:
-            raise ex.XTSDataException("Unknown Content-Type ({content_type}) with response: ({content})".format(
-                content_type=r.headers["content-type"],
-                content=r.content))
+        except Exception as e:
+            raise e

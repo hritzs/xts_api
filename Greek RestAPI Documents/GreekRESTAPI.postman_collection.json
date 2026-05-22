@@ -1,0 +1,1780 @@
+{
+	"info": {
+		"_postman_id": "6de94515-ef70-40d0-bfe0-f0ec91b2d16c",
+		"name": "Greek RESTAPI",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "34891632",
+		"_collection_link": "https://team-api-3117.postman.co/workspace/Team-API-Workspace~b439ab0a-4c65-4009-8834-dd771bbd3ac6/collection/34891632-6de94515-ef70-40d0-bfe0-f0ec91b2d16c?action=share&source=collection_link&creator=34891632"
+	},
+	"item": [
+		{
+			"name": "Session Token",
+			"item": [
+				{
+					"name": "Session_token",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Response status code is 201\", function () {\r",
+									"  pm.response.to.have.status(201);\r",
+									"});\r",
+									"\r",
+									"\r",
+									"pm.test(\"Response time is less than 300ms\", function () {\r",
+									"  pm.expect(pm.response.responseTime).to.be.below(300);\r",
+									"});\r",
+									"\r",
+									"\r",
+									"pm.test(\"Response has the required fields - id and sessionToken\", function () {\r",
+									"    const responseData = pm.response.json();\r",
+									"    \r",
+									"    pm.expect(responseData).to.be.an('object');\r",
+									"    pm.expect(responseData).to.have.property('id');\r",
+									"    pm.expect(responseData).to.have.property('sessionToken');\r",
+									"});\r",
+									"\r",
+									"\r",
+									"pm.test(\"Id is a non-negative integer\", function () {\r",
+									"  const responseData = pm.response.json();\r",
+									"  \r",
+									"  pm.expect(responseData).to.be.an('object');\r",
+									"  pm.expect(responseData.id).to.be.a('number').and.to.satisfy((id) => id >= 0, \"Id should be a non-negative integer\");\r",
+									"});\r",
+									"\r",
+									"\r",
+									"pm.test(\"Session token is a non-empty string\", function () {\r",
+									"  const responseData = pm.response.json();\r",
+									"  \r",
+									"  pm.expect(responseData.sessionToken).to.be.a('string').and.to.have.lengthOf.at.least(1, \"Session token should not be empty\");\r",
+									"});\r",
+									"\r",
+									"var response = pm.response.json();\r",
+									"pm.globals.set(\"sessionToken\", response.sessionToken);\r",
+									"\r",
+									"pm.test(\"Status code is 200\", function () {\r",
+									"    pm.response.to.have.status(200);\r",
+									"});"
+								],
+								"type": "text/javascript",
+								"packages": {}
+							}
+						},
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									""
+								],
+								"type": "text/javascript",
+								"packages": {}
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"username\": \"TEST\",\r\n    \"password\": \"greek@123\",\r\n    \"validFor\": \"30d\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://greekapi.greeksoft.in:3001/auth/greek/sessiontoken",
+							"protocol": "http",
+							"host": [
+								"greekapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3001",
+							"path": [
+								"auth",
+								"greek",
+								"sessiontoken"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Server Flags",
+			"item": [
+				{
+					"name": "FlagValues",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var template = `\r",
+									"<style type=\"text/css\">\r",
+									"    .tftable {font-size:14px;color:#333333;width:100%;border-width: 1px;border-color: #87ceeb;border-collapse: collapse;}\r",
+									"    .tftable th {font-size:18px;background-color:#87ceeb;border-width: 1px;padding: 8px;border-style: solid;border-color: #87ceeb;text-align:left;}\r",
+									"    .tftable tr {background-color:#ffffff;}\r",
+									"    .tftable td {font-size:14px;border-width: 1px;padding: 8px;border-style: solid;border-color: #87ceeb;}\r",
+									"    .tftable tr:hover {background-color:#e0ffff;}\r",
+									"</style>\r",
+									"\r",
+									"<table class=\"tftable\" border=\"1\">\r",
+									"    <tr>\r",
+									"        <th>Config</th>\r",
+									"        <th>Response</th>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>App</td>\r",
+									"        <td>{{response.config.app}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Label</td>\r",
+									"        <td>{{response.config.label}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Message</td>\r",
+									"        <td>{{response.config.message}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Error Code</td>\r",
+									"        <td>{{response.ErrorCode}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>App ID</td>\r",
+									"        <td>{{response.appID}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Apollo IP</td>\r",
+									"        <td>{{response.data.Apollo_IP}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Apollo Port</td>\r",
+									"        <td>{{response.data.Apollo_Port}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Arachne IP</td>\r",
+									"        <td>{{response.data.Arachne_IP}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Arachne Port</td>\r",
+									"        <td>{{response.data.Arachne_Port}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Broadcast Sender Port</td>\r",
+									"        <td>{{response.data.BroadcastSender_Port}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Chart Setting</td>\r",
+									"        <td>{{response.data.ChartSetting}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>DP Type</td>\r",
+									"        <td>{{response.data.DPType}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Iris IP</td>\r",
+									"        <td>{{response.data.Iris_IP}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Iris Port</td>\r",
+									"        <td>{{response.data.Iris_Port}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Is BO Report</td>\r",
+									"        <td>{{response.data.IsBOReport}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Is EDIS Product</td>\r",
+									"        <td>{{response.data.IsEDISProduct}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Is Redis Enabled</td>\r",
+									"        <td>{{response.data.IsRedisEnabled}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Is Strategy Product</td>\r",
+									"        <td>{{response.data.IsStrategyProduct}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Order Sender Port</td>\r",
+									"        <td>{{response.data.OrderSender_Port}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Accord Token</td>\r",
+									"        <td>{{response.data.accord_Token}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>APR Version</td>\r",
+									"        <td>{{response.data.apr_version}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Default Product</td>\r",
+									"        <td>{{response.data.defaultProduct}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>FT Testing Bypass</td>\r",
+									"        <td>{{response.data.ft_testing_bypass}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Heartbeat Intervals</td>\r",
+									"        <td>{{response.data.heartbeat_Intervals}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Holding Flag</td>\r",
+									"        <td>{{response.data.holdingFlag}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Is Secure</td>\r",
+									"        <td>{{response.data.isSecure}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>POS Code</td>\r",
+									"        <td>{{response.data.posCode}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Reconnection Attempts</td>\r",
+									"        <td>{{response.data.reconnection_attempts}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Show Description</td>\r",
+									"        <td>{{response.data.showDescription}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Show Login</td>\r",
+									"        <td>{{response.data.showLogin}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Validate 2FA</td>\r",
+									"        <td>{{response.data.validate2FA}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Validate Guest</td>\r",
+									"        <td>{{response.data.validateGuest}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Validate Password Once</td>\r",
+									"        <td>{{response.data.validatePasswordOnce}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Validate Through</td>\r",
+									"        <td>{{response.data.validateThrough}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Validate Transaction</td>\r",
+									"        <td>{{response.data.validateTransaction}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Info ID</td>\r",
+									"        <td>{{response.infoID}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Message ID</td>\r",
+									"        <td>{{response.msgID}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Server Time</td>\r",
+									"        <td>{{response.serverTime}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Session ID</td>\r",
+									"        <td>{{response.sessionId}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Service Group</td>\r",
+									"        <td>{{response.svcGroup}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Service Name</td>\r",
+									"        <td>{{response.svcName}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Service Version</td>\r",
+									"        <td>{{response.svcVersion}}</td>\r",
+									"    </tr>\r",
+									"</table>\r",
+									"`;\r",
+									"\r",
+									"function constructVisualizerPayload() {\r",
+									"    return {response: pm.response.json()}\r",
+									"}\r",
+									"\r",
+									"pm.visualizer.set(template, constructVisualizerPayload());"
+								],
+								"type": "text/javascript",
+								"packages": {}
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"svcVersion\": \"1.0.0\",\r\n        \"svcGroup\": \"\",\r\n        \"svcName\": \"getFlagValues\",\r\n        \"gscid\": \"NTD\",\r\n        \"data\": {}\r\n    }\r\n}\r\n",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://192.168.207.92:3333/getFlagValues",
+							"protocol": "http",
+							"host": [
+								"192",
+								"168",
+								"207",
+								"92"
+							],
+							"port": "3333",
+							"path": [
+								"getFlagValues"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "User Login & Details",
+			"item": [
+				{
+					"name": "Login Info",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var template = `\r",
+									"<style type=\"text/css\">\r",
+									"    .tftable {font-size:14px;color:#333333;width:100%;border-width: 1px;border-color: #87ceeb;border-collapse: collapse;}\r",
+									"    .tftable th {font-size:18px;background-color:#87ceeb;border-width: 1px;padding: 8px;border-style: solid;border-color: #87ceeb;text-align:left;}\r",
+									"    .tftable tr {background-color:#ffffff;}\r",
+									"    .tftable td {font-size:14px;border-width: 1px;padding: 8px;border-style: solid;border-color: #87ceeb;}\r",
+									"    .tftable tr:hover {background-color:#e0ffff;}\r",
+									"</style>\r",
+									"\r",
+									"<table class=\"tftable\" border=\"1\">\r",
+									"    <tr>\r",
+									"        <th>App ID</th>\r",
+									"        <th>Allowed Market ID</th>\r",
+									"        <th>GCID</th>\r",
+									"        <th>GSCID</th>\r",
+									"        <th>Info ID</th>\r",
+									"        <th>Msg ID</th>\r",
+									"        <th>Server Time</th>\r",
+									"        <th>Svc Group</th>\r",
+									"        <th>Svc Name</th>\r",
+									"        <th>Svc Version</th>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>{{response.appID}}</td>\r",
+									"        <td>{{response.data.AllowedMarket.0.market_id}}</td>\r",
+									"        <td>{{response.data.gcid}}</td>\r",
+									"        <td>{{response.data.gscid}}</td>\r",
+									"        <td>{{response.infoID}}</td>\r",
+									"        <td>{{response.msgID}}</td>\r",
+									"        <td>{{response.serverTime}}</td>\r",
+									"        <td>{{response.svcGroup}}</td>\r",
+									"        <td>{{response.svcName}}</td>\r",
+									"        <td>{{response.svcVersion}}</td>\r",
+									"    </tr>\r",
+									"</table>\r",
+									"`;\r",
+									"\r",
+									"function constructVisualizerPayload() {\r",
+									"    return { response: pm.response.json() }\r",
+									"}\r",
+									"\r",
+									"pm.visualizer.set(template, constructVisualizerPayload());\r",
+									"\r",
+									"var responseData = pm.response.json();\r",
+									"pm.globals.set(\"gcid\", responseData.response.data.gcid);\r",
+									""
+								],
+								"type": "text/javascript",
+								"packages": {}
+							}
+						},
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									""
+								],
+								"type": "text/javascript",
+								"packages": {}
+							}
+						}
+					],
+					"protocolProfileBehavior": {
+						"disabledSystemHeaders": {
+							"accept": true,
+							"connection": true,
+							"accept-encoding": true,
+							"host": true,
+							"user-agent": true
+						}
+					},
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"svcVersion\": \"1.0.0\",\r\n        \"svcGroup\": \"Login\",\r\n        \"svcName\": \"getLoginInfo\",\r\n        \"data\": {\r\n            \"gscid\": \"TEST\"\r\n        }\r\n    }\r\n}\r\n",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getLoginInfo",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getLoginInfo"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Websocket JLogin",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var template = `\r",
+									"<style type=\"text/css\">\r",
+									"    .tftable {font-size:14px;color:#333333;width:100%;border-width: 1px;border-color: #87ceeb;border-collapse: collapse;}\r",
+									"    .tftable th {font-size:18px;background-color:#87ceeb;border-width: 1px;padding: 8px;border-style: solid;border-color: #87ceeb;text-align:left;}\r",
+									"    .tftable tr {background-color:#ffffff;}\r",
+									"    .tftable td {font-size:14px;border-width: 1px;padding: 8px;border-style: solid;border-color: #87ceeb;}\r",
+									"    .tftable tr:hover {background-color:#e0ffff;}\r",
+									"</style>\r",
+									"\r",
+									"<table class=\"tftable\" border=\"1\">\r",
+									"    <tr>\r",
+									"        <th>Key</th>\r",
+									"        <th>Value</th>\r",
+									"    </tr>\r",
+									"    \r",
+									"    <tr>\r",
+									"        <td>ErrorCode</td>\r",
+									"        <td>{{response.ErrorCode}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>appID</td>\r",
+									"        <td>{{response.appID}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>AllowedMarket</td>\r",
+									"        <td>{{response.data.AllowedMarket.[0].market_id}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Apollo_IP</td>\r",
+									"        <td>{{response.data.Apollo_IP}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Apollo_Port</td>\r",
+									"        <td>{{response.data.Apollo_Port}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Arachne_IP</td>\r",
+									"        <td>{{response.data.Arachne_IP}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Arachne_Port</td>\r",
+									"        <td>{{response.data.Arachne_Port}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>BroadcastSender_Port</td>\r",
+									"        <td>{{response.data.BroadcastSender_Port}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>ChartSetting</td>\r",
+									"        <td>{{response.data.ChartSetting}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>ClientCode</td>\r",
+									"        <td>{{response.data.ClientCode}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>DPType</td>\r",
+									"        <td>{{response.data.DPType}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>ErrorCode</td>\r",
+									"        <td>{{response.data.ErrorCode}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Executioncode</td>\r",
+									"        <td>{{response.data.Executioncode}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Iris_IP</td>\r",
+									"        <td>{{response.data.Iris_IP}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Iris_Port</td>\r",
+									"        <td>{{response.data.Iris_Port}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>IsBOReport</td>\r",
+									"        <td>{{response.data.IsBOReport}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>IsEDISProduct</td>\r",
+									"        <td>{{response.data.IsEDISProduct}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>IsRedisEnabled</td>\r",
+									"        <td>{{response.data.IsRedisEnabled}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>IsSameDevice</td>\r",
+									"        <td>{{response.data.IsSameDevice}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>IsStrategyProduct</td>\r",
+									"        <td>{{response.data.IsStrategyProduct}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>IsValidateSecondary</td>\r",
+									"        <td>{{response.data.IsValidateSecondary}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>KYCStatus</td>\r",
+									"        <td>{{response.data.KYCStatus}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>OrderSender_Port</td>\r",
+									"        <td>{{response.data.OrderSender_Port}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>OrderTime</td>\r",
+									"        <td>{{response.data.OrderTime}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>Theme</td>\r",
+									"        <td>{{response.data.Theme}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>cCategory</td>\r",
+									"        <td>{{response.data.cCategory}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>clientName</td>\r",
+									"        <td>{{response.data.clientName}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>defaultProduct</td>\r",
+									"        <td>{{response.data.defaultProduct}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>dob</td>\r",
+									"        <td>{{response.data.dob}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>gscid</td>\r",
+									"        <td>{{response.data.gscid}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>holdingFlag</td>\r",
+									"        <td>{{response.data.holdingFlag}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>isMPINSet</td>\r",
+									"        <td>{{response.data.isMPINSet}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>isStrategyLogin</td>\r",
+									"        <td>{{response.data.isStrategyLogin}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>mandateId</td>\r",
+									"        <td>{{response.data.mandateId}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>panNo</td>\r",
+									"        <td>{{response.data.panNo}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>quote</td>\r",
+									"        <td>{{response.data.quote}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>userType</td>\r",
+									"        <td>{{response.data.userType}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>validate2FA</td>\r",
+									"        <td>{{response.data.validate2FA}}</td>\r",
+									"    </tr>\r",
+									"    <tr>\r",
+									"        <td>validateTransaction</td>\r",
+									"        <td>{{response.data.validateTransaction}}</td>\r",
+									"    </tr>\r",
+									"</table>\r",
+									"`;\r",
+									"\r",
+									"function constructVisualizerPayload() {\r",
+									"    return { response: pm.response.json() }\r",
+									"}\r",
+									"\r",
+									"pm.visualizer.set(template, constructVisualizerPayload());"
+								],
+								"type": "text/javascript",
+								"packages": {}
+							}
+						},
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									"var CryptoJS = require(\"crypto-js\");\r",
+									"\r",
+									"// Get the pass value from the request body\r",
+									"var password = pm.request.body.raw;\r",
+									"\r",
+									"// Check if the password ends with \".md5\"\r",
+									"if (password.includes('\"pass\":')) {\r",
+									"    var match = password.match(/\"pass\":\\s*\"([^\"]+)\"/);\r",
+									"    if (match) {\r",
+									"        var passValue = match[1]; // Extracted value of \"pass\"\r",
+									"\r",
+									"        if (passValue.endsWith(\".md5\")) {\r",
+									"            var plainPassword = passValue.replace(\".md5\", \"\"); // Remove \".md5\"\r",
+									"            var md5Hash = CryptoJS.MD5(plainPassword).toString(); // Convert to MD5\r",
+									"            pm.variables.set(\"hashedPassword\", md5Hash);\r",
+									"\r",
+									"            // Replace the original value with the hashed value in the request body\r",
+									"            pm.request.body.raw = pm.request.body.raw.replace(passValue, md5Hash);\r",
+									"        }\r",
+									"    }\r",
+									"}\r",
+									""
+								],
+								"type": "text/javascript",
+								"packages": {}
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n  \"request\": {\r\n    \"data\": {\r\n      \"pan_dob\": \"01/01/1901\",\r\n      \"deviceId\": \"4f89423bab1280c9\",\r\n      \"gscid\": \"TEST\",\r\n      \"deviceDetails\": \"\",\r\n      \"deviceType\": \"0\",\r\n      \"pass\": \"t@3333333333.md5\",\r\n      \"transPass\": \"\",\r\n      \"userType\": \"Customer\",\r\n      \"brokerid\": \"1\",\r\n      \"passType\": \"0\",\r\n      \"version_no\": \"1.0.1.10\",\r\n      \"encryptionType\": \"1\"\r\n    },\r\n    \"svcName\": \"jloginNew\",\r\n    \"svcGroup\": \"Login\"\r\n  }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/jloginNew",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"jloginNew"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Allowed Product",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"data\": {},\r\n        \"svcName\": \"getAllowedProduct\",\r\n        \"svcGroup\": \"Login\"\r\n    }\r\n}\r\n",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getAllowedProduct",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getAllowedProduct"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Contracts Info",
+			"item": [
+				{
+					"name": "Contracts",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getAllContract",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getAllContract"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Single Scrip Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getFullScripDetailsBySymbol_Mobile?exchange=BSE&assetType=future&code=BKX&type=future",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getFullScripDetailsBySymbol_Mobile"
+							],
+							"query": [
+								{
+									"key": "exchange",
+									"value": "BSE"
+								},
+								{
+									"key": "assetType",
+									"value": "future"
+								},
+								{
+									"key": "code",
+									"value": "BKX"
+								},
+								{
+									"key": "type",
+									"value": "future"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Market Status",
+			"item": [
+				{
+					"name": "MarketStatus",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"data\": {\r\n            \"gscid\": \"TEST\"\r\n        },\r\n        \"svcName\": \"getMarketStatus\",\r\n        \"svcGroup\": \"Markets\"\r\n    }\r\n}\r\n",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getMarketStatus",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getMarketStatus"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Broadcast",
+			"item": [
+				{
+					"name": "Quote for symbol",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"data\": {\r\n            \"token\": \"102045459\",\r\n            \"assetType\": \"option\",\r\n            \"gscid\": \"NTD\",\r\n            \"gcid\": \"{{gcid}}\"\r\n        },\r\n        \"svcName\": \"getQuoteForSingleSymbol_V2\",\r\n        \"svcGroup\": \"Markets\"\r\n    }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://192.168.207.92:3333/getQuoteForSingleSymbol_V2",
+							"protocol": "http",
+							"host": [
+								"192",
+								"168",
+								"207",
+								"92"
+							],
+							"port": "3333",
+							"path": [
+								"getQuoteForSingleSymbol_V2"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Indices Data",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getIndianIndicesData_V2",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getIndianIndicesData_V2"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "getToken_OnlyMbpData",
+					"protocolProfileBehavior": {
+						"disableBodyPruning": true
+					},
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"data\": {\r\n            \"mode\": \"FULL\",\r\n            \"exchangeTokens\": [\r\n                {\r\n                    \"exchange\": \"NSE\",\r\n                    \"token\": \"101001594\"\r\n                },\r\n                {\r\n                    \"exchange\": \"NSE\",\r\n                    \"token\": \"102059456\"\r\n                }\r\n            ]\r\n        },\r\n        \"svcName\": \"getToken_OnlyMbpData\",\r\n        \"svcGroup\": \"Markets\"\r\n    }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://192.168.207.92:3333/getToken_OnlyMbpData",
+							"protocol": "http",
+							"host": [
+								"192",
+								"168",
+								"207",
+								"92"
+							],
+							"port": "3333",
+							"path": [
+								"getToken_OnlyMbpData"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Orders",
+			"item": [
+				{
+					"name": "New Order (PRO) (Manual)",
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									"// Get the manually entered lot size and dynamic LotSize from CSV\r",
+									"let lot = pm.variables.get(\"lot\");   // Lot manually entered in request\r",
+									"let lotSize = pm.variables.get(\"LotSize\");  // LotSize from CSV\r",
+									"\r",
+									"// Ensure both values are numbers before multiplying\r",
+									"let calculatedQty = parseInt(lot) * parseInt(lotSize);\r",
+									"\r",
+									"// Store the result as a variable\r",
+									"pm.variables.set(\"calculatedQty\", calculatedQty.toString());\r",
+									"\r",
+									"console.log(\"Lot:\", lot);\r",
+									"console.log(\"LotSize:\", lotSize);\r",
+									"console.log(\"Calculated Qty:\", pm.variables.get(\"calculatedQty\"));\r",
+									""
+								],
+								"type": "text/javascript",
+								"packages": {}
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n  \"request\": {\r\n    \"data\": {\r\n      \"trigger_price\": \"0\",\r\n      \"gtoken\": \"101014947\",\r\n      \"side\": \"1\", // 1= buy, 2=sell\r\n      \"gcid\": \"82\",\r\n      \"validity\": \"0\",\r\n      \"price\": \"660\",\r\n      \"exchange\": \"NSE\",\r\n      \"disclosed_qty\": \"0\",\r\n      \"tradeSymbol\": \"MOTILALOFS\",\r\n      \"lot\": \"10\",\r\n      \"order_type\": \"1\",\r\n      \"product\": \"1\",\r\n      \"qty\": \"10\",\r\n      \"corderid\": \"3\",\r\n      \"amo\": \"0\",\r\n     \"iprocli\": \"2\", \r\n      \"gtdExpiry\": 0,\r\n      \"is_post_closed\": \"0\",\r\n      \"is_preopen_order\": \"0\",\r\n      \"isSqOffOrder\": \"false\",\r\n      \"offline\": \"0\",\r\n      \"is_restapi\":\"1\",\r\n      \"strategyName\": \"Straddle\"\r\n    },\r\n    \"response_format\": \"json\",\r\n    \"request_type\": \"subscribe\",\r\n    \"streaming_type\": \"NewOrderRequest\"\r\n  }\r\n}\r\n",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://192.168.207.92:3333/NewOrderRequest",
+							"protocol": "http",
+							"host": [
+								"192",
+								"168",
+								"207",
+								"92"
+							],
+							"port": "3333",
+							"path": [
+								"NewOrderRequest"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "New Order (PRO) (Algo)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"data\": {\r\n            \"trigger_price\": \"0\",\r\n            \"gtoken\": \"101003787\",\r\n            \"side\": \"1\",\r\n            \"gcid\": \"{{gcid}}\",\r\n            \"validity\": \"0\",\r\n            \"price\": \"293\",\r\n            \"exchange\": \"NSE\",\r\n            \"disclosed_qty\": \"0\",\r\n            \"tradeSymbol\": \"WIPRO\",\r\n            \"lot\": \"50\",\r\n            \"order_type\": \"1\",\r\n            \"product\": \"1\",\r\n            \"qty\": \"50\",\r\n            \"corderid\": \"3\",\r\n            \"amo\": \"0\",\r\n            \"iprocli\": \"2\",\r\n            \"gtdExpiry\": 0,\r\n            \"is_post_closed\": \"0\",\r\n            \"is_preopen_order\": \"0\",\r\n            \"isSqOffOrder\": \"false\",\r\n            \"offline\": \"0\",\r\n            \"is_restapi\": \"1\",\r\n            \"algoId\": \"555200\",\r\n            \"strategyName\": \"STOCK\"\r\n        },\r\n        \"response_format\": \"json\",\r\n        \"request_type\": \"subscribe\",\r\n        \"streaming_type\": \"NewOrderRequest\"\r\n    }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://192.168.207.92:3333/NewOrderRequest",
+							"protocol": "http",
+							"host": [
+								"192",
+								"168",
+								"207",
+								"92"
+							],
+							"port": "3333",
+							"path": [
+								"NewOrderRequest"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "New Order (CLI)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"data\": {\r\n            \"trigger_price\": \"0\",\r\n            \"gtoken\": \"102046343\",\r\n            \"side\": \"2\",\r\n            \"gcid\": \"{{gcid}}\",\r\n            \"validity\": \"0\",\r\n            \"price\": \"380\",\r\n            \"exchange\": \"NSE\",\r\n            \"disclosed_qty\": \"0\",\r\n            \"tradeSymbol\": \"NIFTY\",\r\n            \"lot\": \"1\",\r\n            \"order_type\": \"1\",\r\n            \"product\": \"0\",\r\n            \"qty\": \"25\",\r\n            \"corderid\": \"3\",\r\n            \"amo\": \"0\",\r\n            \"AccountNumber\": \"NIKR2\",\r\n            \"is_restapi\": \"1\",\r\n            \"gtdExpiry\": 0,\r\n            \"iprocli\": \"1\",\r\n            \"is_post_closed\": \"0\",\r\n            \"is_preopen_order\": \"0\",\r\n            \"isSqOffOrder\": \"false\",\r\n            \"offline\": \"0\",\r\n            \"is_restapi\": \"1\",\r\n            \"strategyName\": \"STOCK\"\r\n        },\r\n        \"response_format\": \"json\",\r\n        \"request_type\": \"subscribe\",\r\n        \"streaming_type\": \"NewOrderRequest\"\r\n    }\r\n}\r\n// {\r\n//   \"request\": {\r\n//     \"data\": {\r\n//       \"trigger_price\": \"0\",\r\n//       \"gtoken\": \"101003787\",\r\n//       \"side\": \"1\",\r\n//       \"gcid\": \"63\",\r\n//       \"validity\": \"0\",\r\n//       \"price\": \"280\",\r\n//       \"exchange\": \"NSE\",\r\n//       \"disclosed_qty\": \"0\",\r\n//       \"tradeSymbol\": \"WIPRO\",\r\n//       \"lot\": \"1\",\r\n//       \"order_type\": \"1\",\r\n//       \"product\": \"0\",\r\n//       \"qty\": \"1\",\r\n//       \"corderid\": \"3\",\r\n//       \"amo\": \"0\",\r\n//     \"AccountNumber\":\"NIKR1 \",\r\n//      \"is_restapi\":\"1\",\r\n//       \"gtdExpiry\": 0,\r\n//       \"iprocli\": \"1\",\r\n//       \"is_post_closed\": \"0\",\r\n//       \"is_preopen_order\": \"0\",\r\n//       \"isSqOffOrder\": \"false\",\r\n//       \"offline\": \"0\",\r\n//       \"is_restapi\":\"1\",\r\n//       \"strategyName\": \"STOCK\"\r\n//     },\r\n//     \"response_format\": \"json\",\r\n//     \"request_type\": \"subscribe\",\r\n//     \"streaming_type\": \"NewOrderRequest\"\r\n//   }\r\n// }",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/NewOrderRequest",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"NewOrderRequest"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "New Order (PRO to CLI)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n  \"request\": {\r\n    \"data\": {\r\n      \"trigger_price\": \"0\",\r\n      \"gtoken\": \"101003787\",\r\n      \"side\": \"1\",\r\n      \"gcid\": \"{{gcid}}\",\r\n      \"validity\": \"0\",\r\n      \"price\": \"300\",\r\n      \"exchange\": \"NSE\",\r\n      \"disclosed_qty\": \"0\",\r\n      \"tradeSymbol\": \"WIPRO\",\r\n      \"lot\": \"1\",\r\n      \"order_type\": \"1\",\r\n      \"product\": \"0\",\r\n      \"qty\": \"1\",\r\n      \"corderid\": \"3\",\r\n      \"amo\": \"0\",\r\n    \"AccountNumber\":\"NIKR1 \",\r\n     \"is_restapi\":\"1\",\r\n     \"iprocli\": \"1\",\r\n      \"gtdExpiry\": 0,\r\n      \"is_post_closed\": \"0\",\r\n      \"is_preopen_order\": \"0\",\r\n      \"isSqOffOrder\": \"false\",\r\n      \"offline\": \"0\",\r\n      \"strategyName\": \"STOCK\"\r\n    },\r\n    \"response_format\": \"json\",\r\n    \"request_type\": \"subscribe\",\r\n    \"streaming_type\": \"NewOrderRequest\"\r\n  }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/NewOrderRequest",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"NewOrderRequest"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Cancel Order",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTYyLCJnc2NpZCI6Ik5URCIsImJyb2tlciI6IlNpbHZlcl9TdHJlYW0iLCJtZXNzYWdlX3JhdGUiOjUsImlhdCI6MTcyNDMwMTkxNiwiZXhwIjoxNzI2ODkzOTE2LCJpc3MiOiJhdXRoMCJ9.dyYEDoBfrwzYfsVTcCMOwx4a7XEKppEajRk8-IDw7KnkNmgHzmVZE2KITj6GU1SvZPzSbN4MSaYweTByFchHl3d6FsZ6YnhrvQ6sC5HXCzvIm4vx21VVCjPepgrO1BIDCenEUG24IZ8yCCdixFmOoZlItdEyCbtGJXjob3QW-z2ubvNCmvgQ4BBw3kqn2NyTLUyFytEU-JtqNEd0kKhNZg4ItczdeLusua3T7qWNB7qDHCS8ZZOK25c1-M7IJ7PCgoPRv7CMAvxzmEuvuem3xXoYHQxEPw46ufYKcuvLckVIUSqnEZL3-oYj2ydQ3dBEIb27D1tUrMKGGpRDXHJg92eEhXqkjIJnY01VsYQ1HfI2izsQ7GMxMUzE5vO9d4Xm-d7WsPpwSOaEmoqXN-CpBigI0qrhXBP568p1HMnOmCuWYduIzFbIyl-5tr9bfOqrx4x8qsimv2VIGAs-i52sJuiOgM7Iy8qPZozdWsJX-pXBevqUPKmFPVcmf5HGvFN4",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/Order/120000104",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"Order",
+								"120000104"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Modify Order",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"data\": {\r\n            \"trigger_price\": \"0\",\r\n            \"gcid\": \"{{gcid}}\",\r\n            \"validity\": \"0\",\r\n            \"price\": \"3605\",\r\n            \"disclosed_qty\": \"0\",\r\n            \"order_type\": \"1\",\r\n            \"lot\": \"10\",\r\n            \"qty\": \"10\",\r\n            \"gorderid\": \"120000003\",\r\n            \"amo\": \"0\",\r\n            \"sl_price\": \"0\",\r\n            \"gtdExpiry\": 0\r\n        },\r\n        \"response_format\": \"json\",\r\n        \"request_type\": \"subscribe\",\r\n        \"streaming_type\": \"ModifyOrderRequest\"\r\n    }\r\n}\r\n",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/SmallModifyOrderRequest",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"SmallModifyOrderRequest"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Order Status",
+			"item": [
+				{
+					"name": "Orderbook All",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getOrderBookDetailWithLegV2?exchangeType=ALL&ClientCode=22&Order_Status=ALL&Ordertype=ALL&gscid=NTD",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getOrderBookDetailWithLegV2"
+							],
+							"query": [
+								{
+									"key": "exchangeType",
+									"value": "ALL"
+								},
+								{
+									"key": "ClientCode",
+									"value": "22"
+								},
+								{
+									"key": "Order_Status",
+									"value": "ALL"
+								},
+								{
+									"key": "Ordertype",
+									"value": "ALL"
+								},
+								{
+									"key": "gscid",
+									"value": "NTD"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Orderbook RMS Rejected",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getOrderBookDetailWithLegV2?exchangeType=ALL&ClientCode=72&Order_Status=RMS_REJECTED&Ordertype=All&gscid=NTD",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getOrderBookDetailWithLegV2"
+							],
+							"query": [
+								{
+									"key": "exchangeType",
+									"value": "ALL"
+								},
+								{
+									"key": "ClientCode",
+									"value": "72"
+								},
+								{
+									"key": "Order_Status",
+									"value": "RMS_REJECTED"
+								},
+								{
+									"key": "Ordertype",
+									"value": "All"
+								},
+								{
+									"key": "gscid",
+									"value": "NTD"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Orderbook Traded",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getOrderBookDetailWithLegV2?exchangeType=ALL&ClientCode=66&Order_Status=Traded&Ordertype=All&gscid=NTD",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getOrderBookDetailWithLegV2"
+							],
+							"query": [
+								{
+									"key": "exchangeType",
+									"value": "ALL"
+								},
+								{
+									"key": "ClientCode",
+									"value": "66"
+								},
+								{
+									"key": "Order_Status",
+									"value": "Traded"
+								},
+								{
+									"key": "Ordertype",
+									"value": "All"
+								},
+								{
+									"key": "gscid",
+									"value": "NTD"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "OrderID Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getOrderDetail?greekOrderNo=120000030&gscid=NTD",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getOrderDetail"
+							],
+							"query": [
+								{
+									"key": "greekOrderNo",
+									"value": "120000030"
+								},
+								{
+									"key": "gscid",
+									"value": "NTD"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Orderbook Pending",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getOrderBookDetailWithLegV2?exchangeType=ALL&ClientCode=72&Order_Status=Pending&Ordertype=All&gscid=NTD",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getOrderBookDetailWithLegV2"
+							],
+							"query": [
+								{
+									"key": "exchangeType",
+									"value": "ALL"
+								},
+								{
+									"key": "ClientCode",
+									"value": "72"
+								},
+								{
+									"key": "Order_Status",
+									"value": "Pending"
+								},
+								{
+									"key": "Ordertype",
+									"value": "All"
+								},
+								{
+									"key": "gscid",
+									"value": "NTD"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Trade Status",
+			"item": [
+				{
+					"name": "Trade Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTYyLCJnc2NpZCI6Ik5URCIsImJyb2tlciI6IlNpbHZlcl9TdHJlYW0iLCJtZXNzYWdlX3JhdGUiOjUsImlhdCI6MTczNzAwNTcwNywiZXhwIjoxNzM5NTk3NzA3LCJpc3MiOiJhdXRoMCJ9.k_NloYeU8sBI8B3ptyfjpiSg4nlvJ9vIGPYv7iU4TJAyErN2Bt6UzuziBKvJf6N2UJWG4FT4liltekrX_nuLbXTv-FWkBNukE3Jqovg_iQU2Z375C1tMPU4RwnnhwP07HTj2OlnlWSKSXLqnoA-gDbkLjZdnaycf150dIVNUM6O2EZZ5T_bNMjDNzEgyA4x8yC_vMh-atvGRA3Rwt5hK_whDUdSZuuNe_z6HhIQT5fhpP8rQOO_oCuaTVyrfEtGkyE2M0FkYEi9WZZrBxTdiEO8HAf8stOTmxqH2ED2-Ex11f8lpPJA7HtMHC1iMTlTHarE2aDOHK-aM58Q2HZu3fZz7cx_vqGWHzw5C5JFgEM-ohTNjDjvRkIolNYJpUZVy91Mw8P7fB3jkItW25ZEmVn36U5brpxyiPDIrHekPdmgG5qZd6H9dRJZa_4rjZLEdK9WqgP9dluSIGEdRvbqWwDLpHJEI9GMES4qXQUG-43AcbZ1PNthTWw7fs6j1Z6wi",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getTradeDetail?greekOrderNo=120000015&gscid=NTD",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getTradeDetail"
+							],
+							"query": [
+								{
+									"key": "greekOrderNo",
+									"value": "120000015"
+								},
+								{
+									"key": "gscid",
+									"value": "NTD"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Portfolio",
+			"item": [
+				{
+					"name": "NetPositions",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"FormFactor\": \"M\",\r\n        \"data\": {\r\n            \"gscid\": \"TEST\"\r\n        },\r\n        \"svcGroup\": \"portfolio\",\r\n        \"svcVersion\": \"1.0.0\",\r\n        \"streaming_type\": \"NPRequest\",\r\n        \"request_type\": \"subscribe\"\r\n    }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/NPRequest",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"NPRequest"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "NetPosition Detailed",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"FormFactor\": \"M\",\r\n        \"data\": {\r\n            \"gscid\": \"TEST\"\r\n        },\r\n        \"svcGroup\": \"portfolio\",\r\n        \"svcVersion\": \"1.0.0\",\r\n        \"streaming_type\": \"NPDetailRequest\",\r\n        \"request_type\": \"subscribe\"\r\n    }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/NPDetailRequest",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"NPDetailRequest"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "NetPosition MTM",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getNetPositionMTM?gscid=TEST",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getNetPositionMTM"
+							],
+							"query": [
+								{
+									"key": "gscid",
+									"value": "TEST"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "NetPosition StrategyName",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/getStrategyNameWiseNetPositionDetail?gscid=NTD",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"getStrategyNameWiseNetPositionDetail"
+							],
+							"query": [
+								{
+									"key": "gscid",
+									"value": "NTD"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Holdings Value",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/HoldingValueInfo",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"HoldingValueInfo"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Holdings Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": ""
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Margin",
+			"item": [
+				{
+					"name": "Margin Detail",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"FormFactor\": \"M\",\r\n        \"data\": {\r\n            \"gcid\": \"78\",\r\n            \"sessionId\": \"\",\r\n            \"segment\": 2,\r\n            \"exchange_type\": \"-1\"\r\n        },\r\n        \"svcGroup\": \"portfolio\",\r\n        \"svcVersion\": \"1.0.0\",\r\n        \"streaming_type\": \"MarginDetailRequest\",\r\n        \"request_type\": \"subscribe\"\r\n    }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/MarginDetailRequest",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"MarginDetailRequest"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Historical Data",
+			"item": [
+				{
+					"name": "OHLC",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{sessionToken}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"request\": {\r\n        \"FormFactor\": \"M\",\r\n        \"data\": {\r\n            \"gscid\": \"TEST\",\r\n            \"token\": 101011536,\r\n            \"interval\": 5,\r\n            \"date\": \"20250325\",\r\n            \"noofdays\": 3\r\n        },\r\n        \"svcGroup\": \"portfolio\",\r\n        \"svcVersion\": \"1.0.0\",\r\n        \"svcName\": \"jhistorical_New\",\r\n        \"requestType\": \"U\"\r\n    }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://restapi.greeksoft.in:3333/get_ohlc",
+							"protocol": "http",
+							"host": [
+								"restapi",
+								"greeksoft",
+								"in"
+							],
+							"port": "3333",
+							"path": [
+								"get_ohlc"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

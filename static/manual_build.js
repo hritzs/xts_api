@@ -6,6 +6,7 @@ document.getElementById('btn-manual-build').addEventListener('click', async () =
     const symbol = document.getElementById('manual-symbol').value;
     const lots = parseInt(document.getElementById('manual-lots').value);
     const deltaNeutral = document.getElementById('manual-delta-neutral').checked;
+    const orderLotsPerCall = parseInt(document.getElementById('manual_lots_per_call').value) || 1;
 
     const resultDiv = document.getElementById('manual-build-result');
     resultDiv.innerHTML = '<p>🔄 Building straddle...</p>';
@@ -17,7 +18,8 @@ document.getElementById('btn-manual-build').addEventListener('click', async () =
             body: JSON.stringify({
                 symbol: symbol,
                 lots: lots,
-                delta_neutral: deltaNeutral
+                delta_neutral: deltaNeutral,
+                order_lots_per_call: orderLotsPerCall
             })
         });
 

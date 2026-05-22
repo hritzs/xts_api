@@ -1,27 +1,72 @@
-# Python artifacts
+# Byte-compiled / optimized / C extensions
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
 
-# Virtual Environments
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+
+# Environments
 .env
+.venv
 env/
 venv/
 
-# Database files
-*.db
-*.sqlite3
+# IDE directories
+.idea/
+.vscode/
 
-# Credentials & Sensitive Config
-# IMPORTANT: Do not commit your actual credentials.
-# Create a cred.py.example with placeholder values.
+# --- Project Specific ---
+# Credentials - DO NOT COMMIT
 cred.py
+
+# Configuration file - Contains user-specific settings
 config.ini
 
-# IDE and editor directories
-.vscode/
-.idea/
+# Database files
+*.db
+*.db-journal
+shared_tokens.db
 
-# Test output files
+# Log files and directories
+logs/
+*.log
+
+# Temporary files
 order_book_response.txt

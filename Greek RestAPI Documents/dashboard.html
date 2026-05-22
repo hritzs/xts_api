@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f8f9fa; margin: 0; padding: 20px; }
+        .dashboard-container { background-color: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); max-width: 800px; margin: 40px auto; }
+        h1 { color: #343a40; }
+        p { color: #495057; line-height: 1.6; }
+        a { color: #007bff; text-decoration: none; font-weight: 500; }
+        a:hover { text-decoration: underline; }
+        .token-display { word-wrap: break-word; background-color: #e9ecef; padding: 15px; border-radius: 4px; margin-top: 20px; font-family: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <h1>Welcome, {{ session.username }}!</h1>
+        <p>You have successfully logged in. Your session token is now stored securely on the server and can be used to make authenticated requests to the Greek REST API.</p>
+        <div class="token-display">
+            <strong>Your Session Token:</strong>
+            <pre>{{ session['session_token'] }}</pre>
+        </div>
+        <p style="margin-top: 30px;"><a href="{{ url_for('logout') }}">Logout</a></p>
+    </div>
+</body>
+</html>
+

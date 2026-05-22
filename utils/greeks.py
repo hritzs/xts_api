@@ -230,9 +230,19 @@ def calculate_all_greeks(option_type: str, K: float, S: float, T: float,
         iv = implied_volatility(option_type, K, S, T, option_price, r)
 
         if math.isnan(iv) or iv == 0:
-            logger.warning(
-                f"Greeks: IV is NaN or 0 for {option_type} K={K} S={S} T={T:.4f} P={option_price}. Returning zero greeks."
-            )
+            # Check if price is below intrinsic, which is a valid reason for IV=0
+            is_call = option_type.lower().startswith('c')
+            intrinsic = max(0.0, S - K) if is_call else max(0.0, K - S)
+            if option_price <= intrinsic:
+                # This is expected for ITM options with bad prices, log as debug instead of warning
+                logger.debug(
+                    f"Greeks: IV is 0 because price {option_price:.2f} <= intrinsic {intrinsic:.2f} for {option_type} K={K} S={S}. "
+                    "This is expected for ITM options and will be corrected using OTM IV."
+                )
+            else:
+                logger.warning(
+                    f"Greeks: IV is NaN or 0 for {option_type} K={K} S={S} T={T:.4f} P={option_price}. Returning zero greeks."
+                )
             return _zero
 
         delta = blackScholes("d", option_type, K, S, T, iv, r)

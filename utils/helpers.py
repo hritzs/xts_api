@@ -11,9 +11,9 @@ from utils.logger import logger
 
 # Trading hours constants
 MARKET_OPEN = time(9, 15)
-MARKET_CLOSE = time(18, 30)
-EXPIRY_TIME = time(18, 30)
-TRADING_MINUTES_PER_DAY = 675  # 6h 15m
+MARKET_CLOSE = time(15, 30)
+EXPIRY_TIME = time(15, 30)
+TRADING_MINUTES_PER_DAY = 375  # 6h 15m
 
 
 def get_ist_now() -> datetime:

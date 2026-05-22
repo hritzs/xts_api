@@ -1,116 +1,156 @@
 """
-Stop-Loss Monitor with Initial Delay
+Stop-Loss Monitor - Start Time + Interval gates, lazy event_bus
 """
+import time
+from datetime import datetime
 import asyncio
-from datetime import datetime, timedelta
 from utils.logger import logger
 from models.state import state
-from trading.pnl_calculator import calculate_aggregate_pnl
 from trading.event_bus import get_event_bus, EventPriority
 from utils.helpers import get_ist_now
 
-class SLMonitor:
-    """
-    Monitors the PnL of a trade and triggers a stop-loss event if the
-    loss threshold is breached. Includes an initial delay.
-    """
-    def __init__(self, trade_uid: str, config: dict):
-        self.trade_uid = trade_uid
-        self.config = config
-        self.running = False
-        self.event_bus = get_event_bus()
 
-        self.sl_bps = config.get('sl_bps', 14)
-        self.sl_monitor_interval = config.get('sl_monitor_interval', 60)
-        self.sl_points = 0.0
-        
+class SLMonitor:
+    def __init__(self, trade_uid: str, config: dict):
+        self.trade_uid         = trade_uid
+        self.config            = config
+        self.running           = False
+        self.sl_bps            = float(config.get('sl_bps', 14))
+        self.interval          = float(config.get('sl_monitor_interval', 60))
+        self.sl_start_time_str = config.get('sl_start_time')  # "HH:MM:SS"
+        self.sl_points         = 0.0
+        self._last_check_time  = 0.0
+
         logger.info(f"✅ SLMonitor initialized: {self.trade_uid}")
-        logger.info(f"   SL BPS: {self.sl_bps} ({self.sl_bps/10000:.2%}) of spot price")
-        logger.info(f"   Check Interval: {self.sl_monitor_interval}s")
+        logger.info(f"   SL BPS: {self.sl_bps} | Interval: {self.interval}s | Start: {self.sl_start_time_str}")
+
+    @property
+    def event_bus(self):
+        return get_event_bus()
 
     async def start(self):
-        """Enables the monitor to be checked by the orchestrator."""
         if self.running:
-            logger.info(f"🛡️ SLMonitor for {self.trade_uid} is already running.")
             return
         self.running = True
-        logger.info(f"🛡️ SLMonitor enabled: {self.trade_uid}")
+
+        try:
+            now = get_ist_now()
+            parts = list(map(int, self.sl_start_time_str.split(':')))
+            configured_start = now.replace(
+                hour=parts[0],
+                minute=parts[1],
+                second=parts[2] if len(parts) > 2 else 0,
+                microsecond=0
+            )
+            elapsed = (now - configured_start).total_seconds()
+            
+            if elapsed < 0:
+                # Before start time: offset so it triggers EXACTLY at start time
+                self._last_check_time = time.monotonic() - self.interval
+            else:
+                # After start time: align checks to the interval rhythm
+                self._last_check_time = time.monotonic() - (elapsed % self.interval)
+        except Exception:
+            self._last_check_time = time.monotonic()
+            elapsed = 0.0
+
+        try:
+            delay = self.interval - (elapsed % self.interval) if elapsed >= 0 else -elapsed
+        except Exception:
+            delay = self.interval
+
+        logger.info(
+            f"🛡️ SLMonitor enabled: {self.trade_uid} | "
+            f"First check in {delay:.0f}s"
+        )
 
     async def stop(self):
-        """Disables the monitor."""
         if not self.running:
             return
         self.running = False
         logger.info(f"🛑 SLMonitor disabled: {self.trade_uid}")
 
     async def check(self):
-        """
-        Performs a single stop-loss check. Called by the TradeManager orchestrator.
-        """
-        try:
-            snapshot_time = get_ist_now()
-            logger.info(f"🛡️ SL Check at {snapshot_time.strftime('%H:%M:%S')} for {self.trade_uid}")
+        if not self.running:
+            return
 
-            # --- Get latest data from snapshot ---
+        # ── Gate 1: Start time ────────────────────────────────────────────────
+        if self.sl_start_time_str:
+            now_time = get_ist_now().time()
+            try:
+                from datetime import time as dt_time
+                parts = list(map(int, self.sl_start_time_str.split(':')))
+                start = dt_time(parts[0], parts[1], parts[2] if len(parts) > 2 else 0)
+                if now_time < start:
+                    return
+            except Exception:
+                pass
+
+        # ── Gate 2: Interval ──────────────────────────────────────────────────
+        now_mono = time.monotonic()
+        if now_mono - self._last_check_time < self.interval:
+            return
+        self._last_check_time = now_mono
+
+        try:
+            logger.info(f"🛡️ SL Check at {get_ist_now().strftime('%H:%M:%S')} for {self.trade_uid}")
+
             snapshot = state.trade_snapshots.get(self.trade_uid)
             if not snapshot:
                 logger.warning(f"SLMonitor: No snapshot available for {self.trade_uid}. Skipping check.")
                 return
 
-            # --- Log positions used for PnL calculation ---
             if snapshot.get('live_positions'):
                 logger.info(f"--- Positions used for SL Check ({self.trade_uid}) ---")
-                sorted_positions = sorted(snapshot['live_positions'], key=lambda p: (p.get('strike', 0), p.get('option_type', '')))
-                for pos in sorted_positions:
+                for pos in sorted(snapshot['live_positions'], key=lambda p: (p.get('strike', 0), p.get('option_type', ''))):
                     logger.info(
                         f"  - {pos.get('action', 'N/A')} {pos.get('quantity', 0)} {pos.get('option_type', '')} {pos.get('strike', 0)} "
-                        f"| Entry: {pos.get('entry_price', 0):.2f} | LTP: {pos.get('ltp', 0):.2f} | PnL: ₹{pos.get('pnl', 0):.2f}"
+                        f"| Entry: {pos.get('entry_price', 0):.2f} | LTP: {pos.get('ltp', 0):.2f} "
+                        f"| PnL: ₹{pos.get('pnl', 0):.2f}"
                     )
                 logger.info("-----------------------------------------------------")
             else:
                 logger.info("--- No live positions found in snapshot for SL Check ---")
-            # --- END LOGGING ---
 
-            # Run synchronous DB call in an executor to avoid blocking the event loop
             loop = asyncio.get_event_loop()
-            db_trade = await loop.run_in_executor(
-                None, state.db.get_straddle_by_id, self.trade_uid
-            )
+            db_trade = await loop.run_in_executor(None, state.db.get_straddle_by_id, self.trade_uid)
             if not db_trade or db_trade.get('status') != 'ACTIVE':
-                logger.warning(f"SLMonitor: Trade {self.trade_uid} not active or not found. Stopping.")
+                logger.warning(f"SLMonitor: Trade {self.trade_uid} not active. Stopping.")
                 await self.stop()
                 return
 
-            # --- NEW SL LOGIC: Per-straddle PnL vs Per-straddle SL from spot ---
-            # FIX: Use the robust PnL/Straddle calculated in the snapshot (based on net open quantity)
-            # instead of re-calculating it here with potentially stale 'total_contracts'.
             pnl_per_straddle = snapshot.get('pnl_per_straddle', 0.0)
-            live_spot_price = snapshot.get('spot_price', 0.0)
+            live_spot_price  = snapshot.get('spot_price', 0.0)
 
             if live_spot_price <= 0:
-                logger.warning(f"SLMonitor: Invalid spot price for {self.trade_uid} ({live_spot_price}). Skipping check.")
+                logger.warning(f"SLMonitor: Invalid spot price for {self.trade_uid} ({live_spot_price}). Skipping.")
                 return
 
-            # Calculate SL threshold per straddle (in points/currency) based on spot
-            sl_points_per_straddle = (live_spot_price * self.sl_bps) / 10000
-            sl_threshold_per_straddle = -1 * sl_points_per_straddle
-
-            # Update sl_points for UI display
-            self.sl_points = sl_points_per_straddle
+            sl_pts         = (live_spot_price * self.sl_bps) / 10000
+            sl_threshold   = -1 * sl_pts
+            self.sl_points = sl_pts
 
             logger.info(f"🛡️  SL Params for {self.trade_uid}:")
             logger.info(f"   - PnL/Straddle: ₹{pnl_per_straddle:.2f}")
-            logger.info(f"   - SL Threshold/Straddle: ₹{sl_threshold_per_straddle:.2f}")
+            logger.info(f"   - SL Threshold/Straddle: ₹{sl_threshold:.2f}")
 
-            if pnl_per_straddle <= sl_threshold_per_straddle:
-                logger.warning(f"🚨 STOP-LOSS HIT: {self.trade_uid} | PnL/Straddle: ₹{pnl_per_straddle:.2f} <= Threshold/Straddle: ₹{sl_threshold_per_straddle:.2f}")
-                await self.event_bus.emit(
-                    event_type="sl_triggered", 
-                    trade_uid=self.trade_uid, 
+            if pnl_per_straddle <= sl_threshold:
+                logger.warning(
+                    f"🚨 STOP-LOSS HIT: {self.trade_uid} | "
+                    f"PnL/Straddle: ₹{pnl_per_straddle:.2f} <= Threshold/Straddle: ₹{sl_threshold:.2f}"
+                )
+                eb = self.event_bus
+                if eb is None:
+                    logger.error(f"❌ SLMonitor: event_bus is None for {self.trade_uid}")
+                    return
+                await eb.emit(
+                    event_type="sl_triggered",
+                    trade_uid=self.trade_uid,
                     priority=EventPriority.STOP_LOSS,
                 )
-                await self.stop() # Stop after triggering
+                await self.stop()
             else:
                 logger.info(f"🛡️ SL Check OK: PnL is above threshold.")
+
         except Exception as e:
             logger.error(f"❌ SLMonitor check error for {self.trade_uid}: {e}", exc_info=True)

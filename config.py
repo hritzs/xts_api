@@ -1,36 +1,43 @@
 """
 Configuration and Constants
 """
-from datetime import timezone, timedelta
+from datetime import timedelta, timezone
 from typing import Final
 
 # Timezone
 IST: Final = timezone(timedelta(hours=5, minutes=30))
+
+# Server
+HOST: Final = "0.0.0.0"
 
 # Exchange Segments
 EXCHANGE_NSEFO: Final = 2
 EXSEG: Final = EXCHANGE_NSEFO  # For backward compatibility
 
 # Market Data Message Codes
-MESSAGE_CODE_LTP: Final = 1512# c:\Users\Administrator\Desktop\api_v2_microservices\config.py
-
-# ... (other existing configurations) ...
-
-# Host for the main application and market data service
-HOST = "127.0.0.1" # Or "localhost", or your desired host IP
+MESSAGE_CODE_LTP: Final = 1512
 
 # Port for the main FastAPI application
-PORT = 5000 # Or your desired port for the main app
+PORT: Final = 5000
 
-# Port for the Market Data Microservice
-MARKET_DATA_PORT = 8001 # This is the missing attribute
+# ── HTTP Service Ports ───────────────────────────────────────────────────────
+# These are for services that still expose a UI or health check via HTTP
+MARKET_DATA_PORT: Final = 8001
+ORDER_SERVICE_PORT: Final = 8002
+SNAPSHOT_SERVICE_PORT: Final = 8003
+VERIFIER_SERVICE_PORT: Final = 8004
 
-# Port for the Order Book Service
-ORDER_SERVICE_PORT = 8002
-
-# Port for the Snapshot Service
-SNAPSHOT_SERVICE_PORT = 8003
-
+# ── ZMQ Communication Ports ──────────────────────────────────────────────────
+# Used for inter-service communication. All ports must be unique.
+ZMQ_MARKETDATA_REQ_PORT: Final = 5560   # REQ/REP  — queries (md_service)
+ZMQ_MARKETDATA_PUB_PORT: Final = 5561   # PUB/SUB  — price broadcasts (md_service)
+ZMQ_MARKETDATA_SUB_PORT: Final = 5562   # PUSH/PULL — subscription commands (md_service)
+ZMQ_TICK_PUB_PORT: Final = 5563         # PUB/SUB  — tick signals → run_dev (md_service)
+ZMQ_FILLS_PUB_PORT: Final = 5564        # PUB/SUB  — fills → run_dev (reconciler)
+ZMQ_VERIFIER_PULL_PORT: Final = 5565    # PULL     — job submission → reconciler (reconciler)
+ZMQ_SNAPSHOT_PULL_PORT: Final = 5566      # PULL - verification completion -> snapshot_service
+ZMQ_SNAPSHOT_FORCE_PULL_PORT: Final = 5567 # PULL - force snapshot -> snapshot_service
+ZMQ_ORDERBOOK_REQ_PORT  = 5569
 
 # Option Chain Settings
 STRIKE_GAPS: Final = {
@@ -58,10 +65,31 @@ REST_POLLING_INTERVAL: Final = 1
 
 # Risk-free rate for Greeks
 RISK_FREE_RATE: Final = 0.0
-
+# In config.py
+ZMQ_RECONCILER_REQ_PORT = 5568
 # Database
-DATABASE_NAME: Final = "straddle_trades.db"
+# This file is assumed to exist and contain configuration variables.
 
-# Server
-HOST: Final = "0.0.0.0"
-PORT: Final = 5000
+# FastAPI main app port
+PORT = 5000
+HOST = "0.0.0.0"
+
+# Microservice HTTP ports (for health checks and direct API calls)
+MARKET_DATA_PORT = 8001
+SNAPSHOT_SERVICE_PORT = 8003
+VERIFIER_SERVICE_PORT = 8004 # Assuming reconciler has an HTTP endpoint for status/debug
+
+# ZMQ Ports
+ZMQ_MARKETDATA_REQ_PORT = 5560
+ZMQ_MARKETDATA_PUB_PORT = 5561
+ZMQ_MARKETDATA_PULL_PORT = 5562 # For market data service to pull requests
+ZMQ_TICK_PUB_PORT = 5563 # For market data service to publish ticks
+
+ZMQ_FILLS_PUB_PORT = 5564 # Order Reconciler publishes order fills/updates (subscribed by main app)
+ZMQ_VERIFIER_PULL_PORT = 5565 # Order Reconciler pulls verification jobs from main app
+ZMQ_SNAPSHOT_PULL_PORT = 5566 # Snapshot Service pulls verification completion notifications from main app
+ZMQ_SNAPSHOT_FORCE_PULL_PORT = 5567 # Snapshot Service pulls force snapshot requests from main app
+
+# Database Name
+DATABASE_NAME = "straddle_trades.db"
+DATABASE_NAME: Final = 'straddle_trades.db'

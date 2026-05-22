@@ -1,0 +1,12 @@
+# cred.py.example
+
+# Interactive API (for placing orders, checking positions, etc.)
+API_KEY_I = "YOUR_INTERACTIVE_API_KEY"
+API_SECRET_I = "YOUR_INTERACTIVE_API_SECRET"
+
+# Market Data API (for fetching prices, option chains, etc.)
+API_KEY_M = "YOUR_MARKETDATA_API_KEY"
+API_SECRET_M = "YOUR_MARKETDATA_API_SECRET"
+
+# Your client ID, required for many API calls, especially in a pro/dealer setup.
+clientID = "YOUR_CLIENT_ID"

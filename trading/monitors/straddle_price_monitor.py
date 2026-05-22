@@ -1,8 +1,8 @@
 """
-Straddle Price Monitor
-Triggers a square-off if the combined premium drops by a configured amount from its high-water mark.
+Straddle Price Monitor - Interval gate + lazy event_bus
+No start_time — runs from position entry.
 """
-import asyncio
+import time
 from typing import Dict
 from utils.logger import logger
 from models.state import state
@@ -10,42 +10,42 @@ from trading.event_bus import get_event_bus, EventPriority
 
 
 class StraddlePriceMonitor:
-    """
-    🎯 STRADDLE PRICE MONITOR
-
-    Monitors the combined straddle premium and triggers a square-off if it drops
-    by a configured amount from its highest point (high-water mark).
-    """
-
     def __init__(self, trade_uid: str, config: Dict):
-        self.trade_uid = trade_uid
-        self.config = config
-        self.running = False
-        self.high_water_mark = 0.0
-        # Read from config on each check to allow for dynamic changes
-        self.monitor_interval = int(config.get('straddle_price_monitor_interval', 5))  # Check frequently
-        logger.info(f"✅ StraddlePriceMonitor initialized: {trade_uid}")
+        self.trade_uid        = trade_uid
+        self.config           = config
+        self.running          = False
+        self.high_water_mark  = 0.0
+        self.interval         = float(config.get('straddle_price_monitor_interval', 3))
+        self._last_check_time = 0.0
+
+        logger.info(f"✅ StraddlePriceMonitor initialized: {trade_uid} | Interval: {self.interval}s")
+
+    @property
+    def event_bus(self):
+        return get_event_bus()
 
     async def start(self):
-        """Enables the monitor to be checked by the orchestrator."""
         trade = state.db.get_straddle_by_id(self.trade_uid)
         if not trade:
             return
-
-        # Initialize high_water_mark with entry premium
-        self.high_water_mark = trade.get('ce_entry_price', 0) + trade.get('pe_entry_price', 0)
-        self.running = True
+        self.high_water_mark  = trade.get('ce_entry_price', 0) + trade.get('pe_entry_price', 0)
+        self.running          = True
+        self._last_check_time = 0.0
         logger.info(f"🎯 StraddlePriceMonitor enabled: {self.trade_uid} | Initial HWM: {self.high_water_mark:.2f}")
 
     async def stop(self):
-        """Disables the monitor."""
         self.running = False
         logger.info(f"🛑 StraddlePriceMonitor disabled: {self.trade_uid}")
 
     async def check(self):
-        """Performs a single check. Called by the TradeManager orchestrator."""
         if not self.running:
             return
+
+        # ── Gate: Interval ────────────────────────────────────────────────
+        now_mono = time.monotonic()
+        if now_mono - self._last_check_time < self.interval:
+            return
+        self._last_check_time = now_mono
 
         trade = state.db.get_straddle_by_id(self.trade_uid)
         if not trade or trade.get('status') != 'ACTIVE':
@@ -56,26 +56,38 @@ class StraddlePriceMonitor:
         if not snapshot:
             return
 
-        live_config = trade.get('config', {})
-        price_drop_trigger = float(live_config.get('straddle_price_drop_trigger', 0.0))
-
+        live_config         = trade.get('config', {})
+        price_drop_trigger  = float(live_config.get('straddle_price_drop_trigger', 0.0))
         if price_drop_trigger <= 0:
             return
 
-        # This monitor uses the main CE/PE legs at the original strike
         original_strike = trade.get('strike')
-        ce_leg = next((p for p in snapshot.get('live_positions', []) if p.get('strike') == original_strike and p.get('option_type') == 'CE'), None)
-        pe_leg = next((p for p in snapshot.get('live_positions', []) if p.get('strike') == original_strike and p.get('option_type') == 'PE'), None)
+        ce_leg = next((p for p in snapshot.get('live_positions', [])
+                       if p.get('strike') == original_strike and p.get('option_type') == 'CE'), None)
+        pe_leg = next((p for p in snapshot.get('live_positions', [])
+                       if p.get('strike') == original_strike and p.get('option_type') == 'PE'), None)
 
-        if not (ce_leg and pe_leg): return
+        if not (ce_leg and pe_leg):
+            return
 
-        current_straddle_price = ce_leg.get('ltp', 0) + pe_leg.get('ltp', 0)
-        self.high_water_mark = max(self.high_water_mark, current_straddle_price)
-        trigger_price = self.high_water_mark - price_drop_trigger
+        current_price        = ce_leg.get('ltp', 0) + pe_leg.get('ltp', 0)
+        self.high_water_mark = max(self.high_water_mark, current_price)
+        trigger_price        = self.high_water_mark - price_drop_trigger
 
-        if current_straddle_price < trigger_price:
-            reason = f"Straddle price drop: {current_straddle_price:.2f} < {trigger_price:.2f} (HWM: {self.high_water_mark:.2f})"
+        if current_price < trigger_price:
+            reason = (
+                f"Straddle price drop: {current_price:.2f} < "
+                f"{trigger_price:.2f} (HWM: {self.high_water_mark:.2f})"
+            )
             logger.warning(f"🚨 STRADDLE PRICE TRIGGER: {self.trade_uid} | {reason}")
-            event_bus = get_event_bus()
-            await event_bus.emit("sl_triggered", self.trade_uid, EventPriority.SL, {'reason': reason})
+            eb = self.event_bus
+            if eb is None:
+                logger.error(f"❌ StraddlePriceMonitor: event_bus is None for {self.trade_uid}")
+                return
+            await eb.emit(
+                event_type="sl_triggered",
+                trade_uid=self.trade_uid,
+                priority=EventPriority.SL,
+                data={'reason': reason}
+            )
             await self.stop()

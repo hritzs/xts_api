@@ -1,29 +1,34 @@
 // ════════════════════════════════════════════════════════════════════════════
-// INITIALIZATION
+// init.js — SOLE entry point for all startup logic.
+//
+// Rule: no other JS file may call connectWebSocket() or loadOptionChain()
+//       from a DOMContentLoaded handler. Everything starts here.
 // ════════════════════════════════════════════════════════════════════════════
+
 async function initializeDashboard() {
-    console.log('🚀 Dashboard initialized');
+    console.log('🚀 Dashboard initializing...');
 
-    // Connect WebSocket
-    connectWebSocket();
-
-    // Update time immediately
+    // 1. Clock
     updateTimeDisplay();
     setInterval(updateTimeDisplay, 1000);
 
-    // Load active straddles
-    fetchStraddles();
-    
-    // Load option chain
-    loadOptionChain();
+    // 2. WebSocket — connect first so seed chain_header_update
+    //    arrives as soon as the chain fetch completes
+    connectWebSocket();
 
-    // Auto-refresh non-WebSocket data (like historical orders) less frequently
+    // 3. Initial data — single authoritative call for each
+    fetchStraddles();
+    loadOptionChain();   // ← only call site for option chain init
+
+    // 4. Periodic refresh for non-WS data only
     setInterval(() => {
-        const isPortfolio = document.getElementById('portfolio-view').classList.contains('active');
-        // fetchStraddles(isPortfolio); // This is now handled by straddle_full_update
-        // loadOptionChain(); // This is now handled by option_chain_update
-        if (isPortfolio) fetchOrders(); // Keep this for historical orders, which don't have a dedicated push update
-    }, 15000); // every 15 seconds
+        const isPortfolio = document.getElementById('portfolio-view')
+            ?.classList.contains('active');
+        if (isPortfolio) fetchOrders();
+    }, 15000);
+
+    console.log('✅ Dashboard ready');
 }
 
+// Single DOMContentLoaded for the entire app
 document.addEventListener('DOMContentLoaded', initializeDashboard);

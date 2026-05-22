@@ -1,86 +1,135 @@
-# c:\Users\Administrator\Desktop\api_v2_microservices\marketdata_service.py
+"""
+marketdata_service.py — Market Data Microservice (ZMQ-based, no FastAPI)
+
+Responsibilities:
+  - XTS Market Data API login + Socket.IO connection
+  - Processes tick data → shared memory price array (PriceSHM)
+  - Builds and caches option chains with Greeks → ChainSHM
+  - Publishes ZeroMQ tick signals on every chain update
+  - Broadcasts price batches via ZMQ PUB
+  - Broadcasts chain_header_update on every spot/syn_fut change
+  - REST fallback polling when socket disconnected
+
+ZMQ Ports (config.py):
+  ZMQ_MARKETDATA_REQ_PORT  (REQ/REP  — option chain, LTP, health queries)
+  ZMQ_MARKETDATA_PUB_PORT  (PUB/SUB  — price_update + chain_header_update broadcasts)
+  ZMQ_MARKETDATA_SUB_PORT  (PULL     — subscription commands, reserved)
+  ZMQ_TICK_PUB_PORT        (PUB/SUB  — tick signals → run_dev)
+"""
 
 import asyncio
 import threading
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 import time
-from fastapi import WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
-from typing import List, Dict, Set
+import json
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict
 
-# Local imports from the main project structure
-# We assume this service runs from the same root directory
-from utils.logger import logger
-from models.state import state  # This state is shared, so it's fine.
-# The socket callbacks (on_socket_connect, etc.) are defined directly in this file,
-# so no import is needed for them. The set_main_event_loop is also not needed here.
+import zmq
+import zmq.asyncio
 
-# Import from the *server-side* marketdata package
-# The service-side implementation of the chain provider is in the 'trading' package
-from trading.chain_provider import set_xts_instances, get_option_chain as build_get_option_chain, get_spot_details
-from market_data.tasks import update_option_chain_cache_loop, process_market_data_queue, rest_polling_loop, monitor_xts_socket_status, calculate_greeks_loop
-from utils.shared_data import SharedDataManager
+from utils.logger       import logger
+from models.state       import state
+from trading.chain_provider import (
+    set_xts_instances,
+    get_option_chain as build_get_option_chain,
+    get_spot_details,
+    SYMBOL_CONFIG,
+)
+from market_data.tasks import (
+    update_option_chain_cache_loop,
+    rest_polling_loop,
+    monitor_xts_socket_status,
+    calculate_greeks_loop,
+)
+from core.shared_memory import PriceSHM, ChainSHM
+from core.zmq_bus       import TickPublisher
+from core.resilient_task import resilient_task
 import config
 import cred
-
-# XTS imports
-from Connect import XTSConnect
+from Connect                import XTSConnect
 from MarketDataSocketClient import MDSocket_io
 
-# --- Globals for this service ---
-xt_m = None
-md_socket = None
-background_tasks = []
-main_event_loop = None  # This will store the event loop for threadsafe operations
-backend_ws_clients: Set[WebSocket] = set() # NEW: Sockets for backend clients (main app)
 
-class SubscriptionItem(BaseModel):
-    symbol: str
-    tokens: List[int]
-
-class SubscriptionRequest(BaseModel):
-    subscriptions: List[SubscriptionItem]
-class BulkDepthRequest(BaseModel):
-    instruments: List[Dict]
-class BulkLTPRequest(BaseModel):
-    tokens: List[int]
+# ── Module-level globals ──────────────────────────────────────────────────────
+xt_m:            XTSConnect  = None
+md_socket:       MDSocket_io = None
+main_event_loop: asyncio.AbstractEventLoop = None
 
 
-# --- Socket Callbacks (logic from market_data/socket_callbacks.py) ---
+# ── Socket Callbacks (called from socket thread) ──────────────────────────────
+
 def on_socket_connect():
-    """Socket.IO connected"""
     state.socket_connected = True
     state.data_source = "WEBSOCKET"
-    logger.info("✅ [MarketData Service] Socket CONNECTED. Data source is WEBSOCKET.")
+    logger.info("✅ [MarketData] Socket CONNECTED — data source: WEBSOCKET")
+
 
 def on_socket_disconnect():
-    """Socket.IO disconnected"""
     state.socket_connected = False
     state.data_source = "REST_POLL"
-    logger.warning("🔌 [MarketData Service] Socket DISCONNECTED. Data source changed to REST_POLL.")
+    logger.warning("🔌 [MarketData] Socket DISCONNECTED — falling back to REST_POLL")
+
 
 def on_socket_error(error):
-    """Socket.IO error"""
-    logger.error(f"❌ [MarketData Service] Socket error: {error}")
+    logger.error(f"❌ [MarketData] Socket error: {error}")
+
 
 def _queue_tick_data(data: dict):
-    """Helper to put tick data onto the asyncio queue from a sync thread."""
+    """Thread-safe: push tick from socket thread → asyncio queue."""
     try:
-        if not isinstance(data, dict): return
+        if not isinstance(data, dict):
+            return
+
         token = data.get('ExchangeInstrumentID')
-        ltp = data.get('LastTradedPrice') or data.get('Touchline', {}).get('LastTradedPrice')
-        if token and ltp:
-            # The process_market_data_queue task will handle updating the state.
-            # This function's only job is to pass the data from the socket thread
-            # to the asyncio event loop.
-            if main_event_loop and hasattr(state, 'market_data_queue') and state.market_data_queue:
+        if not token:
+            return
+
+        # ✅ FIX: Robust LTP extraction covering all message codes:
+        #   1512 → top-level LastTradedPrice
+        #   1501 → Touchline.LastTradedPrice (cash index Touchline)
+        #   1510 → IndexValue (NSE index)
+        #   1502 → IndexValue (BSE index)
+        ltp = None
+
+        # 1. Top-level LastTradedPrice (1512 options/futures)
+        raw_ltp = data.get('LastTradedPrice')
+        if raw_ltp and float(raw_ltp) > 0:
+            ltp = float(raw_ltp)
+
+        # 2. Touchline.LastTradedPrice (1501 cash index Touchline)
+        if ltp is None:
+            touchline = data.get('Touchline', {})
+            if isinstance(touchline, dict):
+                t_ltp = touchline.get('LastTradedPrice')
+                if t_ltp and float(t_ltp) > 0:
+                    ltp = float(t_ltp)
+                # Also try Close as last resort within Touchline
+                if ltp is None:
+                    t_close = touchline.get('Close')
+                    if t_close and float(t_close) > 0:
+                        ltp = float(t_close)
+
+        # 3. IndexValue (1510 NSE index / 1502 BSE index)
+        if ltp is None:
+            idx_val = data.get('IndexValue')
+            if idx_val and float(idx_val) > 0:
+                ltp = float(idx_val)
+
+        if ltp is not None and main_event_loop and not main_event_loop.is_closed():
+            logger.debug(f"TICK RECEIVED: Token={token}, LTP={ltp}")
+            if hasattr(state, 'market_data_queue') and state.market_data_queue:
                 asyncio.run_coroutine_threadsafe(
-                    state.market_data_queue.put(data), main_event_loop
+                    state.market_data_queue.put({
+                        'ExchangeInstrumentID': token,
+                        'ltp': ltp
+                    }),
+                    main_event_loop
                 )
     except Exception as e:
-        logger.error(f"❌ [MarketData Service] Error queuing tick data: {e}")
+        logger.error(f"❌ [MarketData] Error queuing tick: {e}")
+
+
+# ── Message code 1512 — options / futures LTP ─────────────────────────────────
 
 def on_message1512_json_full(data):
     _queue_tick_data(data)
@@ -88,380 +137,551 @@ def on_message1512_json_full(data):
 def on_message1512_json_partial(data):
     _queue_tick_data(data)
 
-# --- NEW: Backend Broadcasting Logic ---
-async def broadcast_to_backends(message: dict):
-    """Broadcasts a message to all connected backend WebSocket clients."""
-    disconnected_clients = set()
-    for client in list(backend_ws_clients):
-        try:
-            await client.send_json(message)
-        except (WebSocketDisconnect, ConnectionResetError, RuntimeError):
-            disconnected_clients.add(client)
-        except Exception as e:
-            logger.error(f"Error broadcasting to backend client: {e}")
-            disconnected_clients.add(client)
 
-    for client in disconnected_clients:
-        backend_ws_clients.discard(client)
+# ── Message code 1501 — Touchline / cash index spot (NSE + BSE) ✅ ────────────
+# All cash indices (NIFTY 26000, BANKNIFTY 26001, SENSEX 26065, etc.)
+# stream real-time spot via 1501 Touchline. This is the PRIMARY spot feed.
 
-async def broadcast_manager():
-    """Listens on the broadcast queue and sends messages to backend clients."""
-    logger.info("🚀 Starting Broadcast Manager for backend clients.")
-    while True:
-        try:
-            message = await state.broadcast_queue.get()
-            await broadcast_to_backends(message)
-            state.broadcast_queue.task_done()
-        except asyncio.CancelledError:
-            logger.info("Broadcast Manager cancelled.")
-            break
-        except Exception as e:
-            logger.error(f"Error in broadcast_manager: {e}", exc_info=True)
+def on_message1501_json_full(data):
+    _queue_tick_data(data)
+
+def on_message1501_json_partial(data):
+    _queue_tick_data(data)
+
+
+# ── Message code 1510 — NSE index LTP (secondary fallback) ───────────────────
+
+def on_message1510_json_full(data):
+    _queue_tick_data(data)
+
+def on_message1510_json_partial(data):
+    _queue_tick_data(data)
+
+
+# ── Message code 1502 — BSE index LTP (secondary fallback) ───────────────────
+
+def on_message1502_json_full(data):
+    _queue_tick_data(data)
+
+def on_message1502_json_partial(data):
+    _queue_tick_data(data)
+
+
+# ── Syn.Fut helper ────────────────────────────────────────────────────────────
+
+def _recompute_syn_fut(ch: dict) -> float | None:
+    """
+    Compute synthetic future from ATM CE/PE prices via put-call parity:
+        Syn.Fut = ATM_Strike + CE_price - PE_price
+    Returns None if prices are unavailable or sanity check fails.
+    """
+    try:
+        atm = ch.get('atm')
+        gap = ch.get('gap', 50)
+        if not atm:
+            return None
+
+        atm_row = next(
+            (r for r in ch.get('chain', []) if r.get('strike') == atm),
+            None
+        )
+        if not atm_row:
+            return None
+
+        ce_tok = atm_row.get('ce_token')
+        pe_tok = atm_row.get('pe_token')
+        if not ce_tok or not pe_tok:
+            return None
+
+        price_shm = getattr(state, 'price_shm', None)
+        ce_p = (price_shm.get(int(ce_tok)) if price_shm else None) or atm_row.get('ce_ltp', 0.0)
+        pe_p = (price_shm.get(int(pe_tok)) if price_shm else None) or atm_row.get('pe_ltp', 0.0)
+
+        if not ce_p or not pe_p or ce_p <= 0 or pe_p <= 0:
+            return None
+
+        syn = float(atm) + float(ce_p) - float(pe_p)
+
+        if abs(syn - float(atm)) > gap * 2:
+            return None
+
+        return syn
+    except Exception:
+        return None
+
+
+# ── Background Tasks ──────────────────────────────────────────────────────────
 
 async def process_and_broadcast_market_data_queue():
     """
-    Replaces the old `process_market_data_queue`.
-    This task processes ticks, updates local state, and batches updates for broadcasting.
+    Core tick processor:
+      1. Drain market_data_queue
+      2. Update PriceSHM
+      3. Batch price_update → broadcast_queue every 200ms or 200 tokens
+      4. On cash-index tick → update chain fut_ltp + recompute syn_fut
+                            → broadcast chain_header_update immediately
+      5. On ATM CE/PE tick  → recompute syn_fut
+                            → broadcast chain_header_update immediately
     """
-    logger.info("🚀 Starting Market Data Queue Processor with Broadcasting.")
-    price_batch = {}
+    logger.info("⚡ Market Data Queue Processor started")
+    price_batch: Dict[int, float] = {}
     last_broadcast_time = time.time()
 
     while True:
         try:
-            # Wait for the first item, but then gather more for a short period.
-            tick = await asyncio.wait_for(state.market_data_queue.get(), timeout=0.5)
+            tick = await asyncio.wait_for(
+                state.market_data_queue.get(), timeout=0.5
+            )
             token = tick.get('ExchangeInstrumentID')
-            ltp = tick.get('LastTradedPrice') or tick.get('Touchline', {}).get('LastTradedPrice')
+            ltp   = tick.get('ltp')
+
             if token and ltp:
-                # --- FIX: Use the shared data manager to update the shared price array ---
-                if hasattr(state, 'shared_data') and state.shared_data:
-                    state.shared_data.update_price(token, float(ltp))
-                # --- END FIX ---
-                price_batch[token] = float(ltp)
+                ltp_float = float(ltp)
+                token_int = int(token)
+
+                # ── 1. Write to PriceSHM ────────────────────────────────────
+                if hasattr(state, 'price_shm') and state.price_shm:
+                    state.price_shm.update(token_int, ltp_float)
+                price_batch[token] = ltp_float
+
+                # ── 2. Chain header updates ─────────────────────────────────
+                chains = getattr(state, 'option_chains', {})
+                for sym, ch in list(chains.items()):
+                    if not ch:
+                        continue
+
+                    header_dirty = False
+
+                    # Case A: Cash index token ticked → update Spot
+                    fut_tok = ch.get('fut_token')
+                    if fut_tok and token_int == int(fut_tok):
+                        ch['fut_ltp'] = ltp_float
+                        header_dirty = True
+
+                    # Case B: ATM CE or PE ticked → update Syn.Fut
+                    atm = ch.get('atm')
+                    if atm:
+                        atm_row = next(
+                            (r for r in ch.get('chain', []) if r.get('strike') == atm),
+                            None
+                        )
+                        if atm_row:
+                            ce_tok = atm_row.get('ce_token')
+                            pe_tok = atm_row.get('pe_token')
+                            if (ce_tok and token_int == int(ce_tok)) or \
+                               (pe_tok and token_int == int(pe_tok)):
+                                header_dirty = True
+
+                    if header_dirty:
+                        syn = _recompute_syn_fut(ch)
+                        if syn is not None:
+                            ch['synthetic_spot'] = syn
+
+                        spot_val = ch.get('fut_ltp', 0.0)
+                        syn_val  = ch.get('synthetic_spot', spot_val)
+
+                        await state.broadcast_queue.put({
+                            'type':    'chain_header_update',
+                            'symbol':  sym,
+                            'spot':    spot_val,
+                            'syn_fut': syn_val,
+                            'atm':     ch.get('atm'),
+                            'expiry':  ch.get('expiry', ''),
+                            'dte':     ch.get('dte', 0),
+                        })
+                        break  # One symbol per tick — avoids O(N) on every tick
+
             state.market_data_queue.task_done()
 
-            # Broadcast if batch is full or timer expires
-            if len(price_batch) >= 200 or (time.time() - last_broadcast_time) > 0.2:
+            # ── 3. Batch price_update broadcast ────────────────────────────
+            now = time.time()
+            if len(price_batch) >= 200 or (now - last_broadcast_time) > 0.2:
                 if price_batch:
-                    await state.broadcast_queue.put({'type': 'price_update', 'data': price_batch.copy()})
+                    await state.broadcast_queue.put({
+                        'type': 'price_update',
+                        'data': price_batch.copy()
+                    })
                     price_batch.clear()
-                    last_broadcast_time = time.time()
+                    last_broadcast_time = now
+
         except asyncio.TimeoutError:
-            # If the queue is empty for a bit, broadcast any remaining items in the batch.
             if price_batch:
-                await state.broadcast_queue.put({'type': 'price_update', 'data': price_batch.copy()})
+                await state.broadcast_queue.put({
+                    'type': 'price_update',
+                    'data': price_batch.copy()
+                })
                 price_batch.clear()
                 last_broadcast_time = time.time()
         except asyncio.CancelledError:
-            logger.info("Market Data Queue Processor cancelled.")
+            logger.info("⚡ Queue Processor cancelled")
             break
         except Exception as e:
-            logger.error(f"Error in market data queue processor: {e}", exc_info=True)
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Lifespan manager for the Market Data Service."""
-    global xt_m, md_socket, background_tasks
+            logger.error(f"❌ Queue Processor error: {e}", exc_info=True)
 
-    logger.info("="*100)
+
+async def broadcast_manager(pub_socket: zmq.asyncio.Socket):
+    """
+    Drains broadcast_queue → publishes via ZMQ PUB.
+    Topic = message type bytes (e.g. b'price_update', b'chain_header_update')
+    """
+    logger.info("📡 ZMQ Broadcast Manager started")
+    while True:
+        try:
+            message = await state.broadcast_queue.get()
+            topic   = message.get('type', 'general').encode('utf-8')
+            payload = json.dumps(message).encode('utf-8')
+            await pub_socket.send_multipart([topic, payload])
+            state.broadcast_queue.task_done()
+        except asyncio.CancelledError:
+            logger.info("📡 Broadcast Manager cancelled")
+            break
+        except Exception as e:
+            logger.error(f"❌ Broadcast Manager error: {e}", exc_info=True)
+
+
+async def request_handler(rep_socket: zmq.asyncio.Socket):
+    """
+    ZMQ REP handler — answers queries from run_dev / snapshot / any client.
+
+    Supported commands:
+      get_option_chain      {symbol}
+      get_spot_details      {symbol}
+      get_bulk_ltp          {tokens: [int, ...]}
+      get_bulk_market_depth {instruments: [...]}
+      subscribe             {symbol, tokens: [int, ...]}
+      health_check          {}
+    """
+    logger.info("🔧 ZMQ Request Handler started")
+    loop     = asyncio.get_event_loop()
+    executor = ThreadPoolExecutor(max_workers=4)
+
+    while True:
+        try:
+            request_bytes = await rep_socket.recv()
+            request       = json.loads(request_bytes.decode('utf-8'))
+            command       = request.get("command", "")
+            payload       = request.get("payload") or {}
+            response      = {"success": False, "error": "Unknown command"}
+
+            # ── Option chain ─────────────────────────────────────────────────
+            if command == "get_option_chain":
+                symbol = payload.get("symbol", "").upper()
+                cached = getattr(state, 'option_chains', {}).get(symbol)
+                if cached and cached.get('fut_ltp'):
+                    response = {"success": True, "data": cached}
+                else:
+                    logger.info(f"📥 ZMQ REQ: building chain for {symbol}")
+                    chain = await asyncio.wait_for(
+                        loop.run_in_executor(executor, build_get_option_chain, symbol),
+                        timeout=10.0
+                    )
+                    if chain:
+                        response = {"success": True, "data": chain}
+                    else:
+                        response = {"success": False, "error": f"Chain unavailable for {symbol}"}
+
+            # ── Spot details ─────────────────────────────────────────────────
+            elif command == "get_spot_details":
+                symbol  = payload.get("symbol", "").upper()
+                details = await asyncio.wait_for(
+                    loop.run_in_executor(executor, get_spot_details, symbol),
+                    timeout=5.0
+                )
+                if details:
+                    response = {"success": True, "data": details}
+                else:
+                    response = {"success": False, "error": f"Spot details not found: {symbol}"}
+
+            # ── Bulk LTP (from PriceSHM — sub-millisecond) ───────────────────
+            elif command == "get_bulk_ltp":
+                tokens = payload.get("tokens", [])
+                prices = {}
+                if hasattr(state, 'price_shm') and state.price_shm:
+                    for tok in tokens:
+                        p = state.price_shm.get(int(tok))
+                        if p:
+                            prices[tok] = p
+                response = {"success": True, "data": prices}
+
+            # ── Bulk market depth ─────────────────────────────────────────────
+            elif command == "get_bulk_market_depth":
+                from trading.chain_provider import get_bulk_market_depth
+                instruments = payload.get("instruments", [])
+                depth_map   = await asyncio.wait_for(
+                    loop.run_in_executor(executor, get_bulk_market_depth, instruments),
+                    timeout=5.0
+                )
+                response = {"success": True, "data": depth_map}
+
+            # ── Subscribe tokens ──────────────────────────────────────────────
+            elif command == "subscribe":
+                symbol = payload.get("symbol", "").upper()
+                tokens = payload.get("tokens", [])
+                base   = next(
+                    (k for k in sorted(SYMBOL_CONFIG.keys(), key=len, reverse=True)
+                     if k in symbol), None
+                )
+                if not base:
+                    response = {"success": False, "error": f"Symbol not in SYMBOL_CONFIG: {symbol}"}
+                else:
+                    seg   = SYMBOL_CONFIG[base].get('segment')
+                    instr = [{'exchangeSegment': seg, 'exchangeInstrumentID': t} for t in tokens]
+                    resp  = md_socket.send_subscription(instr, config.MESSAGE_CODE_LTP)
+                    if resp and resp.get('type') == 'success':
+                        for t in tokens:
+                            state.add_subscription(t)
+                        response = {"success": True, "subscribed": len(tokens)}
+                    else:
+                        response = {"success": False, "error": "XTS subscription failed"}
+
+            # ── Health ────────────────────────────────────────────────────────
+            elif command == "health_check":
+                response = {
+                    "success":          True,
+                    "status":           "ok",
+                    "service":          "MarketData",
+                    "socket_connected": getattr(state, 'socket_connected', False),
+                    "data_source":      getattr(state, 'data_source', 'UNKNOWN'),
+                    "cached_chains":    list(getattr(state, 'option_chains', {}).keys()),
+                }
+
+            await rep_socket.send_json(response)
+
+        except asyncio.TimeoutError:
+            await rep_socket.send_json({"success": False, "error": "Handler timed out"})
+        except asyncio.CancelledError:
+            logger.info("🔧 Request Handler cancelled")
+            break
+        except Exception as e:
+            logger.error(f"❌ Request Handler error: {e}", exc_info=True)
+            try:
+                await rep_socket.send_json({"success": False, "error": str(e)})
+            except Exception:
+                pass
+
+
+async def chain_shm_writer():
+    """
+    Watches state.option_chains for updates.
+    On change to fut_ltp OR synthetic_spot: writes to ChainSHM + publishes ZeroMQ tick signal.
+    Runs every 500ms — low overhead.
+    """
+    logger.info("🔗 ChainSHM writer started")
+    last_state = {}  # symbol → (fut_ltp, syn_fut) tuple
+
+    while True:
+        try:
+            await asyncio.sleep(0.5)
+            chains = getattr(state, 'option_chains', {})
+
+            for symbol, chain in chains.items():
+                if not chain or not chain.get('fut_ltp'):
+                    continue
+
+                fut_ltp     = chain.get('fut_ltp', 0.0)
+                syn_fut     = chain.get('synthetic_spot', fut_ltp)
+                current_key = (fut_ltp, round(syn_fut, 2))
+
+                if last_state.get(symbol) == current_key:
+                    continue
+
+                if symbol not in state.chain_shms:
+                    try:
+                        state.chain_shms[symbol] = ChainSHM(symbol, create=True)
+                        logger.info(f"✅ ChainSHM created for {symbol}")
+                    except Exception as e:
+                        logger.error(f"❌ ChainSHM create failed for {symbol}: {e}")
+                        continue
+
+                state.chain_shms[symbol].write(chain)
+                last_state[symbol] = current_key
+
+                if hasattr(state, 'tick_publisher') and state.tick_publisher:
+                    await state.tick_publisher.publish(symbol)
+
+        except asyncio.CancelledError:
+            logger.info("🔗 ChainSHM writer cancelled")
+            break
+        except Exception as e:
+            logger.error(f"❌ ChainSHM writer error: {e}", exc_info=True)
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+async def main():
+    global xt_m, md_socket, main_event_loop
+
+    logger.info("=" * 100)
     logger.info("🚀 STARTING MARKET DATA MICROSERVICE")
-    logger.info("="*100)
+    logger.info("=" * 100)
+
+    # ── ZMQ context + sockets ─────────────────────────────────────────────────
+    ctx         = zmq.asyncio.Context()
+    rep_socket  = ctx.socket(zmq.REP)
+    pub_socket  = ctx.socket(zmq.PUB)
+    pull_socket = ctx.socket(zmq.PULL)
+
+    rep_port = getattr(config, 'ZMQ_MARKETDATA_REQ_PORT', 5560)
+    pub_port = getattr(config, 'ZMQ_MARKETDATA_PUB_PORT', 5561)
+    sub_port = getattr(config, 'ZMQ_MARKETDATA_SUB_PORT', 5562)
 
     try:
-        # Initialize state queues for this service
-        state.market_data_queue = asyncio.Queue(maxsize=config.MARKET_DATA_QUEUE_SIZE)
-        state.broadcast_queue = asyncio.Queue() # NEW: For broadcasting to backend clients
-
-        # --- FIX: Initialize Shared Data Manager ---
-        # This service is the producer of market data, so it creates the shared memory.
-        logger.info("🧠 Initializing Shared Data for Market Data Service (Attempting to attach)...")
-        try:
-            # Try to attach to existing memory first (created by main.py)
-            state.shared_data = SharedDataManager(create=False)
-            logger.info("✅ Attached to existing Shared Data Manager")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not attach to existing Shared Data ({e}). Creating new...")
-            state.shared_data = SharedDataManager(create=True)
-            logger.info("✅ Created new Shared Data Manager")
-            
-        state.prices = state.shared_data.prices_array
-        
-        # --- FIX: Robust access to option_chains_proxy ---
-        # Use getattr to safely check for the attribute, handling cases where it might be missing on the proxy object
-        state.option_chains = getattr(state.shared_data, 'option_chains_proxy', None)
-        if state.option_chains is None:
-             logger.warning("⚠️ Shared option_chains_proxy not found. Falling back to local dictionary.")
-             state.option_chains = {}
-        logger.info("✅ Shared data structures ready for Market Data Service")
-        
-        # Market Data API Login
-        logger.info("📈 Logging into XTS Market Data API...")
-        xt_m = XTSConnect(cred.API_KEY_M, cred.API_SECRET_M, "WEBAPI")
-        response_m = xt_m.marketdata_login()
-        if response_m.get('type') != 'success':
-            raise Exception(f"Market data login failed: {response_m.get('description', 'Unknown error')}")
-        logger.info("✅ Market Data API logged in")
-        
-        token = response_m['result']['token']
-        user_id = response_m['result']['userID']
-
-        # Socket.IO Client Initialization
-        logger.info("🔌 Initializing Socket.IO client...")
-        md_socket = MDSocket_io(token, user_id)
-        md_socket.on_connect = on_socket_connect
-        md_socket.on_disconnect = on_socket_disconnect
-        md_socket.on_error = on_socket_error
-        md_socket.on_message1512_json_full = on_message1512_json_full
-        md_socket.on_message1512_json_partial = on_message1512_json_partial
-        logger.info("✅ Socket callbacks configured")
-
-        # Set global instances for modules used by this service
-        global main_event_loop; main_event_loop = asyncio.get_event_loop() # Set local main_event_loop
-        set_xts_instances(xt_m, md_socket)
-
-        # Start Background Tasks
-        logger.info("🔄 Starting background tasks for Market Data Service...")
-        task1 = asyncio.create_task(process_and_broadcast_market_data_queue()) # REPLACED
-        task2 = asyncio.create_task(rest_polling_loop()) # This can still run for fallbacks
-        task3 = asyncio.create_task(update_option_chain_cache_loop())
-        task4 = asyncio.create_task(monitor_xts_socket_status())
-        task5 = asyncio.create_task(calculate_greeks_loop()) # NEW: Real-time greeks calculator
-        task6 = asyncio.create_task(broadcast_manager()) # NEW
-        background_tasks.extend([task1, task2, task3, task4, task5, task6])
-        logger.info("✅ Market Data background tasks running")
-
-        # Connect Socket.IO in a separate thread
-        def socket_thread_func():
-            try:
-                logger.info("   🔗 Socket thread started for Market Data Service")
-                md_socket.connect()
-            except Exception as e:
-                logger.error(f"   ❌ Socket thread error: {e}")
-        
-        socket_thread = threading.Thread(target=socket_thread_func, daemon=True)
-        socket_thread.start()
-        logger.info("✅ Socket thread launched")
-        
-        await asyncio.sleep(5) # Wait for socket to connect
-
-        logger.info("="*100)
-        logger.info("✅ MARKET DATA SERVICE READY")
-        logger.info(f"   Listening on: http://localhost:{config.MARKET_DATA_PORT}")
-        logger.info("="*100)
-
+        rep_socket.bind(f"tcp://*:{rep_port}")
+        logger.info(f"🔧 REQ/REP  listening on tcp://*:{rep_port}")
+        pub_socket.bind(f"tcp://*:{pub_port}")
+        logger.info(f"📡 PUB/SUB  listening on tcp://*:{pub_port}")
+        pull_socket.bind(f"tcp://*:{sub_port}")
+        logger.info(f"📬 PUSH/PULL listening on tcp://*:{sub_port}")
     except Exception as e:
-        logger.error(f"❌ MARKET DATA SERVICE STARTUP FAILED: {e}", exc_info=True)
+        logger.error(f"❌ ZMQ socket bind failed: {e}")
         raise
 
-    yield
+    # ── Queues ────────────────────────────────────────────────────────────────
+    state.market_data_queue = asyncio.Queue(
+        maxsize=getattr(config, 'MARKET_DATA_QUEUE_SIZE', 10000)
+    )
+    state.broadcast_queue = asyncio.Queue()
+    logger.info("✅ Async queues initialized")
 
-    # Shutdown sequence
-    logger.info("="*100)
-    logger.info("🛑 SHUTTING DOWN MARKET DATA SERVICE")
-    logger.info("="*100)
-    
-    for task in background_tasks:
-        if not task.done():
-            task.cancel()
-    
-    if background_tasks:
-        await asyncio.gather(*background_tasks, return_exceptions=True)
-    
-    if md_socket:
-        md_socket.disconnect()
-    
-    logger.info("✅ MARKET DATA SERVICE SHUTDOWN COMPLETE")
+    # ── Shared Memory ─────────────────────────────────────────────────────────
+    state.price_shm      = PriceSHM(create=True)
+    state.chain_shms     = {}
+    state.tick_publisher = TickPublisher()
+    state.option_chains  = {}
+    logger.info("✅ Shared memory initialized")
 
-app = FastAPI(
-    title="Market Data Microservice",
-    description="Provides live option chains, greeks, and prices.",
-    version="1.0.0",
-    lifespan=lifespan
-)
+    # ── XTS Login ─────────────────────────────────────────────────────────────
+    logger.info("📈 Logging into XTS Market Data API...")
+    xt_m       = XTSConnect(cred.API_KEY_M, cred.API_SECRET_M, "WEBAPI")
+    response_m = xt_m.marketdata_login()
+    if response_m.get('type') != 'success':
+        raise RuntimeError(
+            f"Market data login failed: {response_m.get('description', 'Unknown')}"
+        )
+    logger.info("✅ Market Data API logged in")
 
-# Get the main app's port from config to build the origins list
-main_app_port = getattr(config, 'PORT', 8000)
+    xts_token = response_m['result']['token']
+    user_id   = response_m['result']['userID']
 
-# Define allowed origins. This is critical when allow_credentials=True.
-# The wildcard '*' is not permitted by browsers when credentials are included.
-# We include variations for browser access (with port) and backend access (without port).
-allowed_origins = [
-    f"http://localhost:{main_app_port}",
-    f"http://127.0.0.1:{main_app_port}",
-    "http://localhost", # Origin for the backend client (main app)
-    "http://127.0.0.1",  # Origin for the backend client (main app)
-]
+    # ── Socket.IO — Wire ALL callbacks ────────────────────────────────────────
+    md_socket = MDSocket_io(xts_token, user_id)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    md_socket.on_connect    = on_socket_connect
+    md_socket.on_disconnect = on_socket_disconnect
+    md_socket.on_error      = on_socket_error
 
-# --- API Endpoints for the service ---
+    # ✅ 1512 — NSE/BSE FO options + futures LTP
+    md_socket.on_message1512_json_full    = on_message1512_json_full
+    md_socket.on_message1512_json_partial = on_message1512_json_partial
 
-@app.get("/api/health")
-async def health():
-    return {
-        "status": "ok",
-        "service": "Market Data",
-        "socket_connected": state.socket_connected,
-        "cached_prices": len(state.prices),
-        "cached_chains": list(state.option_chains.keys())
-    }
+    # ✅ 1501 — Touchline (ALL cash indices: NIFTY, BANKNIFTY, SENSEX, BANKEX etc.)
+    #          PRIMARY real-time Spot feed — was MISSING, caused frozen Spot price
+    md_socket.on_message1501_json_full    = on_message1501_json_full
+    md_socket.on_message1501_json_partial = on_message1501_json_partial
 
-@app.get("/api/option-chain/{symbol}")
-async def api_get_option_chain_data(symbol: str):
-    # The get_option_chain from trading.chain_provider is a blocking, synchronous function.
-    # It will build the chain if it's not in the cache. It also now handles broadcasting.
-    # We run it in an executor to avoid blocking the service's event loop.
-    logger.info(f"📥 API Request: Get option chain for {symbol}")
-    loop = asyncio.get_event_loop()
-    chain = await loop.run_in_executor(None, build_get_option_chain, symbol.upper())
+    # ✅ 1510 — NSE index LTP (secondary fallback)
+    md_socket.on_message1510_json_full    = on_message1510_json_full
+    md_socket.on_message1510_json_partial = on_message1510_json_partial
 
-    if not chain:
-        logger.error(f"❌ Failed to build option chain for {symbol}")
-        # If even the build fails, return an error. This is now a real failure, not just a cache miss.
-        # The client expects a JSON response, not necessarily an HTTP error code, so we'll stick to that pattern
-        # but provide a more informative error.
-        return {"success": False, "error": f"Failed to build or find option chain for {symbol} after attempting build."}
+    # ✅ 1502 — BSE index LTP (secondary fallback)
+    md_socket.on_message1502_json_full    = on_message1502_json_full
+    md_socket.on_message1502_json_partial = on_message1502_json_partial
 
-    # The background task will still keep the cache warm, so most calls will be fast.
-    # This change just handles the startup race condition and provides a fallback if the cache is ever stale.
-    return {"success": True, "data": chain}
+    logger.info("✅ Socket.IO callbacks wired: 1512 FO | 1501 Touchline | 1510 NSE | 1502 BSE")
 
-@app.websocket("/ws/data")
-async def backend_websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for backend clients (e.g., the main application)."""
-    # Log the headers from the incoming handshake request for debugging purposes.
-    # This helps verify that headers like 'Origin' are being received correctly.
-    headers = dict(websocket.scope['headers'])
-    client_host = websocket.client.host
-    logger.info(f"--- WebSocket connection request received for /ws/data from {client_host} ---")
-    logger.info(f"Handshake Headers: {headers}")
+    main_event_loop = asyncio.get_event_loop()
+    set_xts_instances(xt_m, md_socket)
+    logger.info("✅ XTS instances set in chain_provider")
 
-    await websocket.accept()
-    backend_ws_clients.add(websocket)
-    logger.info(f"✅ Backend WebSocket client connected from {client_host}. Total: {len(backend_ws_clients)}")
+    # TEMPORARY token discovery — remove after confirming tokens
+    for _seg in ["NSECM", "NSEIX", "NSECD", "NSECO"]:
+        try:
+            _mr = xt_m.get_master(exchangeSegmentList=[_seg])
+            for _l in _mr.get('result', '').strip().split('\n'):
+                _c = _l.split('|')
+                if len(_c) > 3 and any(x in _c[3].upper() for x in ['BANKNIFTY', 'MIDCPNIFTY', 'FINNIFTY']):
+                    logger.info(f"🔍 [{_seg}] TOKEN: {_c[1]} | NAME: {_c[3]} | TYPE: {_c[2]}")
+        except Exception as _e:
+            logger.info(f"🔍 [{_seg}] skipped: {_e}")
+
+    # ── Socket thread ─────────────────────────────────────────────────────────
+    def _socket_thread():
+        try:
+            logger.info("🔗 Socket thread connecting...")
+            md_socket.connect()
+        except Exception as e:
+            logger.error(f"❌ Socket thread error: {e}")
+
+    threading.Thread(target=_socket_thread, daemon=True).start()
+    logger.info("✅ Socket thread launched")
+    await asyncio.sleep(2)
+    logger.info(f"🔍 DIAG: socket_connected={state.socket_connected}, "
+                f"data_source={getattr(state,'data_source','?')}, "
+                f"market_data_queue size={state.market_data_queue.qsize() if hasattr(state,'market_data_queue') else '?'}")
+    for _ in range(10):
+        if getattr(state, 'socket_connected', False):
+            break
+        await asyncio.sleep(0.5)
+
+    logger.info("=" * 100)
+    logger.info("✅ MARKET DATA SERVICE READY")
+    logger.info(f"   REQ/REP   port: {rep_port}")
+    logger.info(f"   PUB/SUB   port: {pub_port}")
+    logger.info(f"   PUSH/PULL port: {sub_port}")
+    logger.info("=" * 100)
+
+    # ── Launch all tasks ──────────────────────────────────────────────────────
     try:
-        while True:
-            await websocket.receive_text()  # Keep connection alive
-    except WebSocketDisconnect:
-        backend_ws_clients.discard(websocket)
-        logger.warning(f"🔌 Backend WebSocket client from {client_host} disconnected. Total: {len(backend_ws_clients)}")
+        await asyncio.gather(
+            resilient_task("queue_processor",   process_and_broadcast_market_data_queue),
+            resilient_task("rest_polling",      rest_polling_loop),
+            resilient_task("chain_cache_loop",  update_option_chain_cache_loop),
+            resilient_task("socket_monitor",    monitor_xts_socket_status),
+            resilient_task("greeks_loop",       calculate_greeks_loop),
+            resilient_task("broadcast_manager", broadcast_manager, pub_socket),
+            resilient_task("request_handler",   request_handler,   rep_socket),
+            resilient_task("chain_shm_writer",  chain_shm_writer),
+        )
+    except asyncio.CancelledError:
+        logger.info("🛑 Main gather cancelled")
+    finally:
+        logger.info("=" * 100)
+        logger.info("🛑 SHUTTING DOWN MARKET DATA SERVICE")
+        logger.info("=" * 100)
 
-@app.get("/api/prices")
-async def api_get_prices():
-    # This endpoint is superseded by /api/bulk-ltp, but let's make it consistent
-    return {"success": True, "data": state.prices}
+        if md_socket:
+            try:
+                md_socket.disconnect()
+            except Exception:
+                pass
 
-@app.get("/api/spot-details/{symbol}")
-async def api_get_spot_details(symbol: str):
-    # This function now lives in the service, so we can call it directly
-    # We run it in an executor because get_spot_details can make blocking network calls
-    loop = asyncio.get_event_loop()
-    details = await loop.run_in_executor(None, get_spot_details, symbol)
-    if not details:
-        return {"success": False, "error": f"Spot details for {symbol} could not be determined."}
-    return {"success": True, "data": details}
+        for sock in (rep_socket, pub_socket, pull_socket):
+            try:
+                sock.close(linger=0)
+            except Exception:
+                pass
+        try:
+            ctx.term()
+        except Exception:
+            pass
 
-@app.get("/api/ltp/{segment}/{token}")
-async def api_get_ltp(segment: int, token: int):
-    """Returns the last traded price for a single token from the cache."""
-    price = state.get_price(token)
-    if price is None:
-        # Fallback to REST call if not in cache
-        # Use the service's internal (sync) get_ltp function from the correct provider
-        from trading.chain_provider import get_ltp as fetch_ltp
-        loop = asyncio.get_event_loop()
-        # Run the synchronous broker API call in a thread to avoid blocking the service
-        price = await loop.run_in_executor(None, fetch_ltp, token, segment)
-        if price == 0.0:
-            raise HTTPException(status_code=404, detail=f"Price for token {token} not found in cache or via REST.")
-    return {"success": True, "ltp": price}
+        if hasattr(state, 'price_shm') and state.price_shm:
+            state.price_shm.close(unlink=True)
+        for shm in getattr(state, 'chain_shms', {}).values():
+            try:
+                shm.close(unlink=True)
+            except Exception:
+                pass
+        if hasattr(state, 'tick_publisher') and state.tick_publisher:
+            state.tick_publisher.close()
 
-@app.post("/api/subscribe")
-async def api_subscribe_instruments(request: SubscriptionRequest):
-    """Subscribes to a list of instrument tokens, grouped by symbol."""
-    if not md_socket or not md_socket.sid.connected:
-        raise HTTPException(status_code=503, detail="Market data socket not connected.")
+        logger.info("✅ MARKET DATA SERVICE SHUTDOWN COMPLETE")
 
-    # This is the new, robust logic.
-    # It uses the provided symbol to determine the segment, instead of relying on a fragile cache lookup.
-    from trading.chain_provider import SYMBOL_CONFIG
 
-    instruments_by_segment = {}
-    for sub_item in request.subscriptions:
-        symbol_upper = sub_item.symbol.upper()
-        
-        # Find the base symbol (e.g., "NIFTY" from "NIFTY 50")
-        base_symbol = next((key for key in sorted(SYMBOL_CONFIG.keys(), key=len, reverse=True) if key in symbol_upper), None)
-        
-        if not base_symbol:
-            logger.warning(f"Subscription skipped for symbol '{symbol_upper}': Not found in SYMBOL_CONFIG.")
-            continue
-            
-        segment = SYMBOL_CONFIG[base_symbol].get('segment')
-        if not segment:
-            logger.warning(f"Subscription skipped for symbol '{symbol_upper}': No segment defined in SYMBOL_CONFIG.")
-            continue
-        
-        if segment not in instruments_by_segment:
-            instruments_by_segment[segment] = []
-        
-        # Add all tokens for this symbol to the correct segment group
-        instruments_by_segment[segment].extend(sub_item.tokens)
-
-    success_count = 0
-    failed_segments = []
-    for segment, tokens in instruments_by_segment.items():
-        # Remove duplicates
-        unique_tokens = list(set(tokens))
-        instruments_payload = [{'exchangeSegment': segment, 'exchangeInstrumentID': t} for t in unique_tokens]
-        # md_socket.send_subscription is a synchronous call in the provided library
-        response = md_socket.send_subscription(instruments_payload, config.MESSAGE_CODE_LTP)
-        if response and response.get('type') == 'success':
-            success_count += len(unique_tokens)
-            for token in unique_tokens:
-                state.add_subscription(token) # Track subscribed tokens
-        else:
-            failed_segments.append(segment)
-            logger.error(f"Failed to subscribe to {len(unique_tokens)} instruments for segment {segment}.")
-
-    if failed_segments:
-        return {"success": False, "error": f"Subscription failed for segments: {failed_segments}"}
-
-    return {"success": True, "message": f"Subscription request for {success_count} instruments sent."}
-
-@app.post("/api/bulk-ltp")
-async def api_get_bulk_ltp(request: BulkLTPRequest):
-    """Returns the last traded price for a list of tokens from the cache."""
-    prices = {token: state.get_price(token) for token in request.tokens if state.get_price(token) is not None}
-    return {"success": True, "data": prices}
-
-@app.post("/api/bulk-market-depth")
-async def api_get_bulk_market_depth(request: BulkDepthRequest):
-    """
-    Returns the L1 market depth (bid/ask) for a list of instruments.
-    This is called by the main app's OrderExecutor to calculate limit prices.
-    """
-    from trading.chain_provider import get_bulk_market_depth as fetch_bulk_depth
-    
-    loop = asyncio.get_event_loop()
-    # The chain_provider's get_bulk_market_depth is a synchronous function that calls the broker API.
-    # We run it in an executor to avoid blocking the service's event loop.
-    depth_map = await loop.run_in_executor(None, fetch_bulk_depth, request.instruments)
-    return {"success": True, "data": depth_map}
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import uvicorn
-    # Make sure you have added MARKET_DATA_PORT = 8001 to your config.py
-    logger.info(f"🚀 Starting Market Data Service on port {config.MARKET_DATA_PORT}")
-    uvicorn.run(
-        "marketdata_service:app",
-        host=config.HOST,
-        port=config.MARKET_DATA_PORT,
-        log_level="info"
-    )
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("🛑 Market Data Service stopped by user")

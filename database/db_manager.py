@@ -69,6 +69,10 @@ class Database:
                     trade_uid TEXT,
                     symbol TEXT,
                     strike INTEGER,
+                    expiry_date TEXT,
+                    exchange_segment INTEGER,
+                    exchange_name TEXT,
+                    product_type TEXT,
                     expiry TEXT,
                     
                     -- Lots and Quantities (Delta-Neutral Support)
@@ -77,8 +81,11 @@ class Database:
                     lots INTEGER,
                     pe_quantity INTEGER,
                     ce_quantity INTEGER,
-                    quantity INTEGER,
+                    quantity INTEGER, -- Kept for compatibility
+                    initial_pe_quantity INTEGER,
+                    initial_ce_quantity INTEGER,
                     total_quantity INTEGER,
+                    lot_size INTEGER DEFAULT 0,
                     
                     -- CE Details
                     ce_token INTEGER,
@@ -87,6 +94,10 @@ class Database:
                     ce_app_order_id TEXT,
                     ce_entry_price REAL,
                     ce_delta REAL,
+                    ce_gamma REAL,
+                    ce_theta REAL,
+                    ce_vega REAL,
+                    ce_iv REAL,
                     
                     -- PE Details
                     pe_token INTEGER,
@@ -95,6 +106,10 @@ class Database:
                     pe_app_order_id TEXT,
                     pe_entry_price REAL,
                     pe_delta REAL,
+                    pe_gamma REAL,
+                    pe_theta REAL,
+                    pe_vega REAL,
+                    pe_iv REAL,
                     
                     -- Greeks & Delta-Neutral
                     net_delta REAL,
@@ -108,12 +123,17 @@ class Database:
                     -- Config-Based Trading
                     config TEXT,
                     entry_spot REAL,
+                    spot_price REAL,
+                    fut_token INTEGER,
                     sl_points REAL,
                     
                     -- Timestamps
+                    entry_timestamp TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     closed_at TIMESTAMP,
-                    created_date TEXT
+                    created_date TEXT,
+                    realized_pnl REAL DEFAULT 0,
+                    psqf_percentage REAL DEFAULT 0
                 )
             """)
             
@@ -157,6 +177,13 @@ class Database:
                 self.conn.commit()
                 logger.info("✅ Migration complete: pe_app_order_id added")
             
+            if 'lot_size' not in columns:
+                logger.info("🔄 Migrating database: Adding lot_size column")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN lot_size INTEGER DEFAULT 0")
+                self.conn.commit()
+                logger.info("✅ Migration complete: lot_size added")
+
+
             # Add ce_gamma if missing
             if 'ce_gamma' not in columns:
                 logger.info("🔄 Migrating database: Adding ce_gamma column")
@@ -191,6 +218,96 @@ class Database:
                 self.cursor.execute("ALTER TABLE straddles ADD COLUMN entry_timestamp TEXT")
                 self.conn.commit()
                 logger.info("✅ Migration complete: entry_timestamp added")
+
+            if 'expiry_date' not in columns:
+                logger.info("🔄 Migrating database: Adding expiry_date column")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN expiry_date TEXT")
+                self.conn.commit()
+                logger.info("✅ Migration complete: expiry_date added")
+
+            if 'exchange_segment' not in columns:
+                logger.info("🔄 Migrating database: Adding exchange_segment column")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN exchange_segment INTEGER")
+                self.conn.commit()
+                logger.info("✅ Migration complete: exchange_segment added")
+
+            if 'exchange_name' not in columns:
+                logger.info("🔄 Migrating database: Adding exchange_name TEXT")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN exchange_name TEXT")
+                self.conn.commit()
+                logger.info("✅ Migration complete: exchange_name added")
+
+            if 'product_type' not in columns:
+                logger.info("🔄 Migrating database: Adding product_type TEXT")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN product_type TEXT")
+                self.conn.commit()
+                logger.info("✅ Migration complete: product_type added")
+
+            if 'initial_pe_quantity' not in columns:
+                logger.info("🔄 Migrating database: Adding initial_pe_quantity INTEGER")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN initial_pe_quantity INTEGER")
+                self.conn.commit()
+                logger.info("✅ Migration complete: initial_pe_quantity added")
+
+            if 'initial_ce_quantity' not in columns:
+                logger.info("🔄 Migrating database: Adding initial_ce_quantity INTEGER")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN initial_ce_quantity INTEGER")
+                self.conn.commit()
+                logger.info("✅ Migration complete: initial_ce_quantity added")
+
+            if 'ce_vega' not in columns:
+                logger.info("🔄 Migrating database: Adding ce_vega REAL")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN ce_vega REAL")
+                self.conn.commit()
+                logger.info("✅ Migration complete: ce_vega added")
+
+            if 'ce_iv' not in columns:
+                logger.info("🔄 Migrating database: Adding ce_iv REAL")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN ce_iv REAL")
+                self.conn.commit()
+                logger.info("✅ Migration complete: ce_iv added")
+
+            if 'pe_vega' not in columns:
+                logger.info("🔄 Migrating database: Adding pe_vega REAL")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN pe_vega REAL")
+                self.conn.commit()
+                logger.info("✅ Migration complete: pe_vega added")
+
+            if 'pe_iv' not in columns:
+                logger.info("🔄 Migrating database: Adding pe_iv REAL")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN pe_iv REAL")
+                self.conn.commit()
+                logger.info("✅ Migration complete: pe_iv added")
+
+            if 'spot_price' not in columns:
+                logger.info("🔄 Migrating database: Adding spot_price REAL")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN spot_price REAL")
+                self.conn.commit()
+                logger.info("✅ Migration complete: spot_price added")
+
+            if 'fut_token' not in columns:
+                logger.info("🔄 Migrating database: Adding fut_token INTEGER")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN fut_token INTEGER")
+                self.conn.commit()
+                logger.info("✅ Migration complete: fut_token added")
+
+            if 'closed_at' not in columns:
+                logger.info("🔄 Migrating database: Adding closed_at TIMESTAMP")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN closed_at TIMESTAMP")
+                self.conn.commit()
+                logger.info("✅ Migration complete: closed_at added")
+                
+            if 'realized_pnl' not in columns:
+                logger.info("🔄 Migrating database: Adding realized_pnl REAL")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN realized_pnl REAL DEFAULT 0")
+                self.conn.commit()
+                logger.info("✅ Migration complete: realized_pnl added")
+                
+            if 'psqf_percentage' not in columns:
+                logger.info("🔄 Migrating database: Adding psqf_percentage REAL")
+                self.cursor.execute("ALTER TABLE straddles ADD COLUMN psqf_percentage REAL DEFAULT 0")
+                self.conn.commit()
+                logger.info("✅ Migration complete: psqf_percentage added")
             
         except Exception as e:
             logger.error(f"❌ Migration error: {e}")
@@ -247,50 +364,78 @@ class Database:
                 if 'config' in straddle_data and isinstance(straddle_data['config'], dict):
                     config_json = json.dumps(straddle_data['config'])
 
-                # Count the values to ensure they match
+                # Define the full list of columns in the correct order
+                columns = [
+                    'straddle_id', 'trade_uid', 'symbol', 'strike', 'expiry', 'expiry_date', 'exchange_segment',
+                    'exchange_name', 'product_type', 'pe_lots', 'ce_lots', 'lots', 'pe_quantity', 'ce_quantity',
+                    'quantity', 'initial_pe_quantity', 'initial_ce_quantity', 'total_quantity', 'lot_size',
+                    'ce_token', 'ce_symbol', 'ce_order_id', 'ce_app_order_id', 'ce_entry_price', 'ce_delta',
+                    'ce_gamma', 'ce_theta', 'ce_vega', 'ce_iv',
+                    'pe_token', 'pe_symbol', 'pe_order_id', 'pe_app_order_id', 'pe_entry_price', 'pe_delta',
+                    'pe_gamma', 'pe_theta', 'pe_vega', 'pe_iv',
+                    'net_delta', 'delta_neutral', 'total_premium', 'status', 'execution_time', 'entry_spot',
+                    'spot_price', 'fut_token', 'config', 'sl_points', 'entry_timestamp', 'closed_at', 'created_date',
+                    'realized_pnl', 'psqf_percentage'
+                ]
+
+                # Prepare the values tuple, ensuring all keys are safely accessed
                 values = (
                     straddle_data['straddle_id'],
                     straddle_data.get('trade_uid', straddle_data['straddle_id']),
                     straddle_data['symbol'],
                     straddle_data['strike'],
                     straddle_data.get('expiry', ''),
+                    straddle_data.get('expiry_date'),
+                    straddle_data.get('exchange_segment'),
+                    straddle_data.get('exchange_name'),
+                    straddle_data.get('product_type'),
                     straddle_data.get('pe_lots', straddle_data.get('lots', 1)),
                     straddle_data.get('ce_lots', straddle_data.get('lots', 1)),
                     straddle_data.get('lots', 1),
-                    straddle_data.get('pe_quantity', straddle_data.get('quantity', 0)),
-                    straddle_data.get('ce_quantity', straddle_data.get('quantity', 0)),
+                    straddle_data.get('pe_quantity', 0),
+                    straddle_data.get('ce_quantity', 0),
                     straddle_data.get('quantity', 0),
-                    straddle_data.get('total_quantity', straddle_data.get('quantity', 0)),
+                    straddle_data.get('initial_pe_quantity', 0),
+                    straddle_data.get('initial_ce_quantity', 0),
+                    straddle_data.get('total_quantity', 0),
+                    straddle_data.get('lot_size', 0),
                     straddle_data['ce_token'],
                     straddle_data['ce_symbol'],
                     straddle_data.get('ce_order_id', ''),
                     straddle_data.get('ce_app_order_id', ''),
                     straddle_data.get('ce_entry_price', 0),
                     straddle_data.get('ce_delta', 0),
-                    straddle_data.get('ce_gamma', 0),
-                    straddle_data.get('ce_theta', 0),
+                    straddle_data.get('ce_gamma', 0.0),
+                    straddle_data.get('ce_theta', 0.0),
+                    straddle_data.get('ce_vega', 0.0),
+                    straddle_data.get('ce_iv', 0.0),
                     straddle_data['pe_token'],
                     straddle_data['pe_symbol'],
                     straddle_data.get('pe_order_id', ''),
                     straddle_data.get('pe_app_order_id', ''),
                     straddle_data.get('pe_entry_price', 0),
                     straddle_data.get('pe_delta', 0),
-                    straddle_data.get('pe_gamma', 0),
-                    straddle_data.get('pe_theta', 0),
+                    straddle_data.get('pe_gamma', 0.0),
+                    straddle_data.get('pe_theta', 0.0),
+                    straddle_data.get('pe_vega', 0.0),
+                    straddle_data.get('pe_iv', 0.0),
                     straddle_data.get('net_delta', 0),
                     1 if straddle_data.get('delta_neutral', False) else 0,
                     straddle_data.get('total_premium', 0),
                     straddle_data.get('status', 'ACTIVE'),
                     straddle_data.get('execution_time', 0),
                     straddle_data.get('entry_spot', 0),
-                    config_json,  # Pass config as JSON
+                    straddle_data.get('spot_price', 0),
+                    straddle_data.get('fut_token'),
+                    config_json,
                     straddle_data.get('sl_points', 0.0),
                     straddle_data.get('entry_timestamp', ''),
-                    get_ist_date_str()
+                    straddle_data.get('closed_at'), # Can be None
+                    get_ist_date_str(),
+                    straddle_data.get('realized_pnl', 0.0),
+                    straddle_data.get('psqf_percentage', 0.0)
                 )
 
-                # Debug: check lengths
-                columns = ['straddle_id', 'trade_uid', 'symbol', 'strike', 'expiry', 'pe_lots', 'ce_lots', 'lots', 'pe_quantity', 'ce_quantity', 'quantity', 'total_quantity', 'ce_token', 'ce_symbol', 'ce_order_id', 'ce_app_order_id', 'ce_entry_price', 'ce_delta', 'ce_gamma', 'ce_theta', 'pe_token', 'pe_symbol', 'pe_order_id', 'pe_app_order_id', 'pe_entry_price', 'pe_delta', 'pe_gamma', 'pe_theta', 'net_delta', 'delta_neutral', 'total_premium', 'status', 'execution_time', 'entry_spot', 'config', 'sl_points', 'entry_timestamp', 'created_date']
                 logger.debug(f"Columns: {len(columns)}, Values: {len(values)}")
                 
                 self.cursor.execute(f"""
@@ -304,6 +449,37 @@ class Database:
                 logger.error(f"Insert straddle error: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
+
+    def update_order_status(self, app_order_id: str, status: str, order_data: Dict):
+        """
+        Update the status and other relevant fields of an existing order.
+        This method is crucial for the reconciler to persist order state changes.
+        """
+        with self.lock:
+            try:
+                self.cursor.execute("""
+                    UPDATE orders SET
+                        order_status = ?,
+                        order_avg_price = ?,
+                        cumulative_quantity = ?,
+                        leaves_quantity = ?,
+                        cancel_reject_reason = ?,
+                        exchange_transact_time = ?,
+                        last_update_datetime = ?
+                    WHERE app_order_id = ?
+                """, (
+                    status,
+                    order_data.get('OrderAverageTradedPrice', 0) or order_data.get('order_avg_price', 0),
+                    order_data.get('CumulativeQuantity', 0) or order_data.get('cumulative_quantity', 0),
+                    order_data.get('LeavesQuantity', 0) or order_data.get('leaves_quantity', 0),
+                    order_data.get('CancelRejectReason', ''),
+                    order_data.get('ExchangeTransactTime'),
+                    order_data.get('LastUpdateDateTime'),
+                    app_order_id
+                ))
+                self.conn.commit()
+            except Exception as e:
+                logger.error(f"❌ Update order status error for {app_order_id}: {e}")
     
     def update_straddle_entry_prices(self, straddle_id: str, ce_price: float, pe_price: float):
         """Update straddle with fill prices"""
@@ -400,23 +576,9 @@ class Database:
         with self.lock:
             try:
                 # The trade_uid is part of the order_unique_id (e.g., BUILD_ny1234_... or HEDGE_ny1234_...)
-                # FIX: Also check for truncated UID if the full UID search fails or just use a broader search
-                # If trade_uid is 'ny040326150700a', we search for '%ny040326150700a%'.
-                # If that fails, we could try searching for the base without the suffix if needed, but fixing insertion is better.
                 self.cursor.execute("SELECT * FROM orders WHERE order_unique_id LIKE ?", (f'%{trade_uid}%',))
                 rows = self.cursor.fetchall()
                 orders = [dict(row) for row in rows]
-                
-                # --- FIX: Fallback for suffixed trade UIDs matching base order UIDs ---
-                if not orders and trade_uid and trade_uid[-1].isalpha() and len(trade_uid) > 1 and trade_uid[-2].isdigit():
-                    base_uid = trade_uid[:-1]
-                    logger.warning(f"⚠️ No orders found for {trade_uid}. Trying fallback search with base UID {base_uid}...")
-                    self.cursor.execute("SELECT * FROM orders WHERE order_unique_id LIKE ?", (f'%{base_uid}%',))
-                    rows = self.cursor.fetchall()
-                    fallback_orders = [dict(row) for row in rows]
-                    if fallback_orders:
-                        logger.info(f"✅ Found {len(fallback_orders)} orders using base UID {base_uid}.")
-                        orders = fallback_orders
 
                 logger.info(f"🔍 Found {len(orders)} orders in DB for trade {trade_uid} via get_orders_by_trade_id.")
                 return orders
@@ -473,7 +635,7 @@ class Database:
                 today = get_ist_date_str()
                 self.cursor.execute("""
                     SELECT * FROM straddles 
-                    WHERE status IN ('FILLED', 'ACTIVE', 'PENDING') 
+                    WHERE status IN ('FILLED', 'ACTIVE', 'PENDING','SQUARING-OFF') 
                     AND created_date = ?
                     ORDER BY created_at DESC
                 """, (today,))

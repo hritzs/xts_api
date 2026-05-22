@@ -44,7 +44,7 @@ fut_ltp = get_ltp(exchange_instrument_id)
 atm = round(fut_ltp/gap)*gap if fut_ltp else None
 
 print("Expiry Date: ", expiryDate, "| FUT LTP: ", fut_ltp, "| Strike Price: ", atm)
-strikes = [atm + i * gap for i in range(-5, 5 + 1)] if atm is not None else []
+strikes = [atm + i * gap for i in range(-15, 15 + 1)] if atm is not None else []
 print("Strikes: ", strikes)
 
 for strike in strikes:

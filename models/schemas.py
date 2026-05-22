@@ -15,7 +15,20 @@ class StraddleRequest(BaseModel):
     symbol: str = Field(..., description="Index symbol", example="NIFTY")
     lots: int = Field(1, gt=0, description="Number of lots", example=5)
     delta_neutral: bool = Field(True, description="Enable delta-neutral positioning")
+    hedge_monitor_interval: float = Field(60.0, gt=0, description="Hedge check interval (s)")
+    sl_monitor_interval: float = Field(60.0, gt=0, description="SL check interval (s)")
+    roll_monitor_interval: float = Field(60.0, gt=0, description="Roll check interval (s)")
+    order_lots_per_call: int = Field(1, gt=0, description="Lots to be passed in one call to the broker")
 
+
+class CustomStraddleRequest(StraddleRequest):
+    """
+    Custom straddle/strangle order request with specific strikes.
+    Inherits all fields from StraddleRequest.
+    """
+    ce_strike_price: int = Field(..., description="Strike price for the Call option leg.")
+    pe_strike_price: int = Field(..., description="Strike price for the Put option leg.")
+    product_type: str = Field("MIS", description="Product type (MIS/NRML)", example="MIS")
 
 class ConfigBuildRequest(BaseModel):
     """
@@ -25,6 +38,10 @@ class ConfigBuildRequest(BaseModel):
     """
     symbol: str = Field(..., description="Index symbol", example="NIFTY")
     size: int = Field(..., gt=0, description="Number of lots", example=5)
+    
+    # Custom strikes
+    ce_strike_price: Optional[int] = Field(None, description="Custom CE strike price. If provided, pe_strike_price must also be set. If None, ATM is used.")
+    pe_strike_price: Optional[int] = Field(None, description="Custom PE strike price. If provided, ce_strike_price must also be set. If None, ATM is used.")
     
     # Entry filters
     idv: float = Field(..., gt=0, description="IDV threshold", example=15.0)
@@ -42,9 +59,9 @@ class ConfigBuildRequest(BaseModel):
     roll_flag_check_interval: float = Field(60.0, gt=0, description="Roll flag interval (s)")
     
     # Hedge parameters
-    hedge_div: float = Field(2.0, gt=0, description="Hedge divisor")
-    straddle_div: float = Field(2.0, gt=0, description="Straddle divisor")
-    roll_straddle_div: float = Field(8.0, gt=0, description="Roll straddle divisor")
+    hedge_div: float = Field(57.0, gt=0, description="Hedge divisor")
+    straddle_div: float = Field(4.0, gt=0, description="Straddle divisor")
+    roll_straddle_div: float = Field(0.2, gt=0, description="Roll straddle divisor")
     hedge_frac: float = Field(0.7, ge=0, le=1, description="Hedge fraction")
     
     # Order placement buffers
@@ -60,6 +77,7 @@ class ConfigBuildRequest(BaseModel):
     hedge_start_time: Optional[str] = Field(None, description="Specific start time for hedge monitor (HH:MM or HH:MM:SS)", example="09:30")
     sl_start_time: Optional[str] = Field(None, description="Specific start time for SL monitor (HH:MM or HH:MM:SS)", example="09:21")
     roll_start_time: Optional[str] = Field(None, description="Specific start time for roll monitor (HH:MM or HH:MM:SS)", example="10:00")
+    order_lots_per_call: int = Field(1, gt=0, description="Lots to be passed in one call to the broker")
 
 
 class HedgeRequest(BaseModel):
@@ -74,6 +92,11 @@ class HedgeRequest(BaseModel):
 class SquareOffRequest(BaseModel):
     """Square-off request"""
     trade_uid: str = Field(..., description="Trade UID", example="ny230126133755")
+
+
+class PartialSquareOffRequest(BaseModel):
+    """Partial square-off request"""
+    percentage: float = Field(..., gt=0, le=100, description="Percentage of the original position to square off.")
 
 
 class RollRequest(BaseModel):

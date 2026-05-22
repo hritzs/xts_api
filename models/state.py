@@ -106,7 +106,7 @@ class DashboardState:
             self.option_chains = {}
             self.option_chains[symbol.upper()] = chain_data
 
-    def is_option_chain_stale(self, symbol: str, max_age: int = 15) -> bool:
+    def is_option_chain_stale(self, symbol: str, max_age: int = 5) -> bool:
         """
         Checks if the cached option chain for a symbol is older than max_age seconds.
         """

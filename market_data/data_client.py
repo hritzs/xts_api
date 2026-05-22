@@ -1,223 +1,150 @@
 # c:\Users\Administrator\Desktop\api_v2_microservices\market_data\data_client.py
-import httpx
 import asyncio
-import websockets
 import json
+import zmq
+import zmq.asyncio
 from typing import Dict, Optional, List
 from utils.logger import logger
 from models.state import state
 import config
 
-# Determine the correct host to connect to.
-# A server might listen on '0.0.0.0' (all interfaces), but a client must connect to a specific IP.
-# When running locally, this should be '127.0.0.1'.
-_server_host = getattr(config, 'HOST', '127.0.0.1')
-_client_connect_host = '127.0.0.1' if _server_host == '0.0.0.0' else _server_host
+_zmq_ctx: Optional[zmq.asyncio.Context] = None
 
-# Use a single, reusable async client for efficiency.
-# The base URL is constructed from config, making it easy to change.
-_http_client = httpx.AsyncClient(
-    base_url=f"http://{_client_connect_host}:{config.MARKET_DATA_PORT}",
-    timeout=10.0
-)
+def get_zmq_context() -> zmq.asyncio.Context:
+    """Get a singleton ZMQ context."""
+    global _zmq_ctx
+    if _zmq_ctx is None or _zmq_ctx.closed:
+        _zmq_ctx = zmq.asyncio.Context()
+    return _zmq_ctx
+
+async def send_zmq_request(command: str, payload: dict, timeout: int = 5000) -> dict:
+    """Helper to send a REQ to the marketdata service and get a REP."""
+    ctx = get_zmq_context()
+    socket = ctx.socket(zmq.REQ)
+    socket.connect(f"tcp://localhost:{config.ZMQ_MARKETDATA_REQ_PORT}")
+    try:
+        request = {"command": command, "payload": payload}
+        await socket.send_json(request)
+
+        poller = zmq.asyncio.Poller()
+        poller.register(socket, zmq.POLLIN)
+        if await poller.poll(timeout):
+            response = await socket.recv_json()
+            return response
+        else:
+            logger.error(f"ZMQ request '{command}' timed out after {timeout}ms.")
+            return {"success": False, "error": "Request timed out"}
+    except Exception as e:
+        logger.error(f"ZMQ request '{command}' failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+    finally:
+        socket.close()
 
 async def get_option_chain_from_service(symbol: str) -> Optional[Dict]:
     """Fetches the option chain from the dedicated market data service."""
-    try:
-        response = await _http_client.get(f"/api/option-chain/{symbol.upper()}")
-        response.raise_for_status()
-        data = response.json()
-        if data.get('success'):
-            return data.get('data')
-        else:
-            logger.error(f"Market Data Service error fetching option chain for {symbol}: {data.get('error')}")
-            return None
-    except httpx.HTTPStatusError as e:
-        try:
-            error_data = e.response.json()
-            logger.error(f"HTTP status error fetching option chain for {symbol}: {e.response.status_code} - {error_data.get('detail') or error_data.get('error')}")
-        except Exception:
-            logger.error(f"HTTP status error fetching option chain for {symbol}: {e.response.status_code} - {e.response.text}")
-        return None
-    except httpx.RequestError as e:
-        logger.error(f"Network error fetching option chain for {symbol}: {e}. Is Market Data Microservice running?")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Error processing option chain response for {symbol}: {e}", exc_info=True)
+    response = await send_zmq_request("get_option_chain", {"symbol": symbol.upper()})
+    if response and response.get('success'):
+        return response.get('data')
+    else:
+        error = response.get('error', 'Unknown error')
+        logger.error(f"ZMQ error fetching option chain for {symbol}: {error}")
         return None
 
 async def get_spot_details_from_service(symbol: str) -> Optional[Dict]:
     """Fetches spot details from the dedicated market data service."""
-    try:
-        response = await _http_client.get(f"/api/spot-details/{symbol.upper()}")
-        response.raise_for_status()
-        data = response.json()
-        if data.get('success'):
-            return data.get('data')
-        else:
-            logger.error(f"Market Data Service error fetching spot details for {symbol}: {data.get('error')}")
-            return None
-    except httpx.HTTPStatusError as e:
-        try:
-            error_data = e.response.json()
-            logger.error(f"HTTP status error fetching spot details for {symbol}: {e.response.status_code} - {error_data.get('detail') or error_data.get('error')}")
-        except Exception:
-            logger.error(f"HTTP status error fetching spot details for {symbol}: {e.response.status_code} - {e.response.text}")
-        return None
-    except httpx.RequestError as e:
-        logger.error(f"Network error fetching spot details for {symbol}: {e}. Is Market Data Microservice running?")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Error processing spot details response for {symbol}: {e}", exc_info=True)
+    response = await send_zmq_request("get_spot_details", {"symbol": symbol.upper()})
+    if response and response.get('success'):
+        return response.get('data')
+    else:
+        error = response.get('error', 'Unknown error')
+        logger.error(f"ZMQ error fetching spot details for {symbol}: {error}")
         return None
 
 async def get_ltp_from_service(token: int, segment: int = config.EXCHANGE_NSEFO) -> float:
     """Fetches LTP for a given token from the Market Data Microservice."""
-    try:
-        response = await _http_client.get(f"/api/ltp/{segment}/{token}")
-        response.raise_for_status()
-        data = response.json()
-        if data.get('success'):
-            return float(data.get('ltp', 0.0))
-        else:
-            logger.warning(f"Market Data Service error fetching LTP for {token}: {data.get('error') or data.get('detail')}")
-            return 0.0
-    except httpx.RequestError:
-        # Don't spam logs for network errors on single LTP fetches, as they can be frequent during startup/shutdown
+    # Use bulk endpoint for efficiency, even for a single token
+    response = await send_zmq_request("get_bulk_ltp", {"tokens": [token]})
+    if response and response.get('success'):
+        prices = response.get('data', {})
+        # ZMQ response keys are strings
+        return float(prices.get(str(token), 0.0))
+    else:
+        error = response.get('error', 'Unknown error')
+        logger.warning(f"ZMQ error fetching LTP for {token}: {error}")
         return 0.0
-    except Exception as e:
-        logger.error(f"Unexpected error fetching LTP for {token}: {e}", exc_info=True)
-        return 0.0
-
-async def get_market_depth_from_service(token: int) -> Optional[Dict]:
-    """Fetches market depth for a given token from the Market Data Microservice."""
-    try:
-        # NOTE: This endpoint does not exist in the provided marketdata_service.py
-        response = await _http_client.get(f"/api/market-depth/{token}")
-        response.raise_for_status()
-        data = response.json()
-        if data.get('success'):
-            return data.get('data')
-        else:
-            logger.warning(f"Market Data Service error fetching market depth for {token}: {data.get('error') or data.get('detail')}")
-            return None
-    except httpx.RequestError as e:
-        logger.warning(f"Network error fetching market depth for {token}: {e}. Is Market Data Microservice running?")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error fetching market depth for {token}: {e}", exc_info=True)
-        return None
 
 async def get_bulk_market_depth_from_service(instruments: List[Dict]) -> Dict[int, Dict]:
     """Fetches market depth for multiple tokens from the Market Data Microservice."""
-    try:
-        # Pass the full instrument list, which includes exchange segments
-        response = await _http_client.post("/api/bulk-market-depth", json={"instruments": instruments})
-        response.raise_for_status()
-        data = response.json()
-        if data.get('success'):
-            return {int(k): v for k, v in data.get('data', {}).items()}
-        else:
-            logger.warning(f"Market Data Service error fetching bulk market depth: {data.get('error') or data.get('detail')}")
-            return {}
-    except httpx.RequestError as e:
-        logger.warning(f"Network error fetching bulk market depth: {e}. Is Market Data Microservice running?")
-        return {}
-    except Exception as e:
-        logger.error(f"Unexpected error fetching bulk market depth: {e}", exc_info=True)
+    response = await send_zmq_request("get_bulk_market_depth", {"instruments": instruments})
+    if response and response.get('success'):
+        # ZMQ response keys are strings
+        return {int(k): v for k, v in response.get('data', {}).items()}
+    else:
+        error = response.get('error', 'Unknown error')
+        logger.warning(f"ZMQ error fetching bulk market depth: {error}")
         return {}
 
 async def get_bulk_ltp_from_service(tokens: List[int]) -> Dict[int, float]:
     """Fetches LTP for multiple tokens from the Market Data Microservice."""
-    try:
-        response = await _http_client.post("/api/bulk-ltp", json={"tokens": tokens})
-        response.raise_for_status()
-        data = response.json()
-        if data.get('success'):
-            # The service returns string keys, convert them to int
-            return {int(k): float(v) for k, v in data.get('data', {}).items()}
-        else:
-            logger.warning(f"Market Data Service error fetching bulk LTP: {data.get('error') or data.get('detail')}")
-            return {}
-    except httpx.RequestError:
-        # Don't spam logs for network errors on bulk LTP fetches
-        return {}
-    except Exception as e:
-        logger.error(f"Unexpected error fetching bulk LTP: {e}", exc_info=True)
+    response = await send_zmq_request("get_bulk_ltp", {"tokens": tokens})
+    if response and response.get('success'):
+        # ZMQ response keys are strings
+        return {int(k): float(v) for k, v in response.get('data', {}).items()}
+    else:
+        error = response.get('error', 'Unknown error')
+        logger.warning(f"ZMQ error fetching bulk LTP: {error}")
         return {}
 
 async def market_data_service_listener():
     """
-    Connects to the Market Data Microservice via WebSocket and listens for real-time updates.
-    This single function replaces the previous polling loops for prices and option chains.
+    Connects to the Market Data Microservice via ZMQ SUB socket and listens for real-time updates.
     """
-    uri = f"ws://{_client_connect_host}:{config.MARKET_DATA_PORT}/ws/data"
-    
-    # Define extra headers to include the Origin. This is often required by server-side
-    # CORS middleware, even for backend-to-backend WebSocket connections.
-    # The websockets library does not send this by default, unlike a browser.
-    extra_headers = {"Origin": f"http://{_client_connect_host}"}
+    ctx = get_zmq_context()
+    sub_socket = ctx.socket(zmq.SUB)
+    sub_socket.connect(f"tcp://localhost:{config.ZMQ_MARKETDATA_PUB_PORT}")
 
-    logger.info(f"🚀 Connecting to Market Data Service stream at {uri}...")
-    logger.info(f"Handshake headers being sent: {extra_headers}")
+    # Subscribe to all topics (empty prefix)
+    sub_socket.setsockopt_string(zmq.SUBSCRIBE, "")
+
+    logger.info(f"🚀 Listening to Market Data Service stream on tcp://localhost:{config.ZMQ_MARKETDATA_PUB_PORT}...")
 
     while True:
         try:
-            async with websockets.connect(uri, extra_headers=extra_headers) as websocket:
-                logger.info("✅ Connected to Market Data Service real-time stream.")
-                while True:
-                    message_str = await websocket.recv()
-                    message = json.loads(message_str)
-                    msg_type = message.get('type')
+            topic, payload_bytes = await sub_socket.recv_multipart()
+            message = json.loads(payload_bytes.decode('utf-8'))
+            msg_type = message.get('type')
 
-                    if msg_type == 'price_update':
-                        prices = message.get('data', {})
-                        if prices:
-                            # Use the unified update_price method on state which handles both shared memory and local dict
-                            for token, ltp in prices.items():
-                                state.update_price(int(token), float(ltp))
-                            
-                            logger.debug(f"Received {len(prices)} price updates via WebSocket.")
-                            # Re-broadcast the whole batch to frontend clients
-                            from background.tasks import broadcast_message
-                            # This is a fire-and-forget task to avoid blocking the listener
-                            asyncio.create_task(broadcast_message({'type': 'price_update', 'data': prices}))
-                    elif msg_type == 'option_chain_update':
-                        symbol = message.get('symbol')
-                        chain_data = message.get('data')
-                        if symbol and chain_data:
-                            # Ensure option_chains dict exists for local caching in worker processes
-                            if state.option_chains is None:
-                                state.option_chains = {}
+            if msg_type == 'price_update':
+                prices = message.get('data', {})
+                if prices:
+                    for token, ltp in prices.items():
+                        state.update_price(int(token), float(ltp))
+                    
+                    logger.debug(f"Received {len(prices)} price updates via ZMQ.")
+                    from background.tasks import broadcast_message
+                    asyncio.create_task(broadcast_message({'type': 'price_update', 'data': prices}))
+            
+            elif msg_type == 'option_chain_update':
+                symbol = message.get('symbol')
+                chain_data = message.get('data')
+                if symbol and chain_data:
+                    if state.option_chains is None:
+                        state.option_chains = {}
+                    state.update_option_chain(symbol, chain_data)
+                    logger.info(f"Received and updated option chain for {symbol} via ZMQ.")
+                    from background.tasks import broadcast_message
+                    asyncio.create_task(broadcast_message({'type': 'option_chain_update', 'data': chain_data}))
 
-                            state.update_option_chain(symbol, chain_data)
-                            logger.info(f"Received and updated option chain for {symbol} via WebSocket.")
-                            # Re-broadcast the chain update to frontend clients
-                            from background.tasks import broadcast_message
-                            asyncio.create_task(broadcast_message({
-                                'type': 'option_chain_update',
-                                'data': chain_data
-                            }))
-        except (websockets.exceptions.ConnectionClosedError, ConnectionRefusedError, OSError) as e:
-            logger.error(f"🔌 Market Data Service stream disconnected: {type(e).__name__}. Reconnecting in 5s...")
-            await asyncio.sleep(5)
         except asyncio.CancelledError:
-            logger.info("Price sync loop cancelled.")
+            logger.info("Market data listener cancelled.")
             break
         except Exception as e:
-            logger.error(f"Unexpected error in price sync loop: {e}", exc_info=True)
+            logger.error(f"Unexpected error in market data listener: {e}", exc_info=True)
             await asyncio.sleep(5)
 
 async def initialize_market_data_client():
-    """Initializes the HTTP client for the market data service."""
-    global _http_client
-    if _http_client.is_closed:
-        _http_client = httpx.AsyncClient(
-            base_url=f"http://{_client_connect_host}:{config.MARKET_DATA_PORT}",
-            timeout=10.0
-        )
-    
-    # Initialize local state caches if they are missing (e.g. in worker processes)
+    """Initializes the ZMQ client for the market data service."""
+    get_zmq_context()
     if state.prices is None:
         state.prices = {}
     if state.option_chains is None:
@@ -225,11 +152,11 @@ async def initialize_market_data_client():
     logger.info("✅ Market Data Client initialized.")
 
 async def close_market_data_client():
-    """Closes the HTTP client."""
-    global _http_client
-    if not _http_client.is_closed:
-        await _http_client.aclose()
-        logger.info("✅ Market Data Client closed.")
+    """Closes the ZMQ context."""
+    global _zmq_ctx
+    if _zmq_ctx and not _zmq_ctx.closed:
+        _zmq_ctx.term()
+        logger.info("✅ ZMQ Market Data Client context terminated.")
 
 async def sync_prices_from_service_loop():
     """Alias for market_data_service_listener."""
@@ -237,8 +164,7 @@ async def sync_prices_from_service_loop():
 
 async def subscribe_active_straddles():
     """
-    Subscribes to active straddle instruments by sending them to the Market Data Microservice.
-    The microservice is responsible for maintaining the actual socket subscriptions.
+    Sends subscription requests for active straddles to the Market Data Microservice via ZMQ PUSH.
     """
     if not state.db:
         logger.error("❌ Database not initialized for active straddle subscription.")
@@ -280,26 +206,25 @@ async def subscribe_active_straddles():
         if not subscriptions_payload:
             return
 
-        response = await _http_client.post(
-            "/api/subscribe",
-            json={"subscriptions": subscriptions_payload},
-            timeout=10.0
-        )
-        response.raise_for_status()
-        data = response.json()
+        ctx = get_zmq_context()
+        push_socket = ctx.socket(zmq.PUSH)
+        push_socket.connect(f"tcp://localhost:{config.ZMQ_MARKETDATA_SUB_PORT}")
+        
+        try:
+            payload = {
+                "command": "subscribe",
+                "payload": {"subscriptions": subscriptions_payload}
+            }
+            await push_socket.send_json(payload)
 
-        if data.get('success'):
+            # Update local state optimistically
             total_tokens = sum(len(item['tokens']) for item in subscriptions_payload)
             for item in subscriptions_payload:
                 for token in item['tokens']:
                     state.add_subscription(token)
-            logger.info(f"✅ Successfully requested subscription for {total_tokens} instruments from Market Data Service.")
-        else:
-            logger.error(f"❌ Market Data Service failed to subscribe instruments: {data.get('error') or data.get('detail')}")
+            logger.info(f"✅ Pushed subscription request for {total_tokens} instruments to Market Data Service.")
+        finally:
+            push_socket.close()
 
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error during active straddle subscription: {e.response.status_code} - {e.response.text}")
-    except httpx.RequestError as e:
-        logger.error(f"Network error during active straddle subscription: {e}. Is Market Data Microservice running?")
     except Exception as e:
         logger.error(f"Unexpected error during active straddle subscription: {e}", exc_info=True)

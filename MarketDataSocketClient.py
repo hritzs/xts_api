@@ -39,6 +39,18 @@ class MDSocket_io:
         self.on_error = None
         self.on_message1512_json_full = None
         self.on_message1512_json_partial = None
+        # ✅ ADDED: External callbacks for cash index ticks
+        self.on_message1510_json_full = None
+        self.on_message1510_json_partial = None
+        # ✅ ADDED: External callbacks for BSE cash index ticks (1502)
+        self.on_message1502_json_full = None
+        self.on_message1502_json_partial = None
+        # ✅ ADDED: External callbacks for BSE cash index ticks (1502)
+        self.on_message1502_json_full = None
+        self.on_message1502_json_partial = None
+        # ✅ ADDED: External callbacks for Touchline (1501)
+        self.on_message1501_json_full = None
+        self.on_message1501_json_partial = None
         
         # Load config
         self._load_config()
@@ -179,17 +191,45 @@ class MDSocket_io:
     
     # Other handlers (basic implementation)
     def _on_message1501_json_full(self, data):
-        logging.debug("1501 FULL received")
+        """Handle 1501 Full Touchline Message (for cash indices)"""
+        try:
+            if isinstance(data, str): data = json.loads(data)
+            logging.debug(f"🔔 1501 FULL: Token={data.get('ExchangeInstrumentID')}, LTP={data.get('LastTradedPrice')}")
+            if self.on_message1501_json_full:
+                self.on_message1501_json_full(data)
+        except Exception as e:
+            logging.error(f"1501 full handler error: {e}")
     
     def _on_message1501_json_partial(self, data):
-        logging.debug("1501 PARTIAL received")
+        """Handle 1501 Partial Touchline Message (for cash indices)"""
+        try:
+            if isinstance(data, str): data = json.loads(data)
+            logging.debug(f"🔔 1501 PARTIAL: Token={data.get('ExchangeInstrumentID')}, LTP={data.get('LastTradedPrice')}")
+            if self.on_message1501_json_partial:
+                self.on_message1501_json_partial(data)
+        except Exception as e:
+            logging.error(f"1501 partial handler error: {e}")
     
     def _on_message1502_json_full(self, data):
-        logging.debug("1502 FULL received")
+        """Handle 1502 Full Index/Quote Message"""
+        try:
+            if isinstance(data, str): data = json.loads(data)
+            logging.debug(f"🔔 1502 FULL: Token={data.get('ExchangeInstrumentID')}, IndexValue={data.get('IndexValue')}")
+            if self.on_message1502_json_full:
+                self.on_message1502_json_full(data)
+        except Exception as e:
+            logging.error(f"1502 full handler error: {e}")
     
     def _on_message1502_json_partial(self, data):
-        logging.debug("1502 PARTIAL received")
-    
+        """Handle 1502 Partial Index/Quote Message"""
+        try:
+            if isinstance(data, str): data = json.loads(data)
+            logging.debug(f"🔔 1502 PARTIAL: Token={data.get('ExchangeInstrumentID')}, IndexValue={data.get('IndexValue')}")
+            if self.on_message1502_json_partial:
+                self.on_message1502_json_partial(data)
+        except Exception as e:
+            logging.error(f"1502 partial handler error: {e}")
+
     def _on_message1505_json_full(self, data):
         logging.debug("1505 FULL received")
     
@@ -197,10 +237,30 @@ class MDSocket_io:
         logging.debug("1505 PARTIAL received")
     
     def _on_message1510_json_full(self, data):
-        logging.debug("1510 FULL received")
+        """Handle 1510 Full Index LTP Message"""
+        try:
+            if isinstance(data, str):
+                data = json.loads(data)
+            
+            logging.debug(f"🔔 1510 FULL: Token={data.get('ExchangeInstrumentID')}, IndexValue={data.get('IndexValue')}")
+            
+            if self.on_message1510_json_full:
+                self.on_message1510_json_full(data)
+        except Exception as e:
+            logging.error(f"1510 full handler error: {e}")
     
     def _on_message1510_json_partial(self, data):
-        logging.debug("1510 PARTIAL received")
+        """Handle 1510 Partial Index LTP Message"""
+        try:
+            if isinstance(data, str):
+                data = json.loads(data)
+            
+            logging.debug(f"🔔 1510 PARTIAL: Token={data.get('ExchangeInstrumentID')}, IndexValue={data.get('IndexValue')}")
+            
+            if self.on_message1510_json_partial:
+                self.on_message1510_json_partial(data)
+        except Exception as e:
+            logging.error(f"1510 partial handler error: {e}")
     
     def send_subscription(self, instruments: List[Dict], message_type: int = 1512) -> Dict:
         """
@@ -221,7 +281,8 @@ class MDSocket_io:
             # ✅ Emit 'join' event (XTS Socket.IO convention)
             self.sid.emit('join', subscription_payload)
             
-            logging.info(f"📡 Socket subscription sent: {len(instruments)} instruments (code={message_type})")
+            logging.info(f"📡 Socket subscription sent via 'join' event: {len(instruments)} instruments (code={message_type})")
+            logging.debug(f"   - Payload: {subscription_payload}")
             return {'type': 'success', 'count': len(instruments)}
             
         except Exception as e:

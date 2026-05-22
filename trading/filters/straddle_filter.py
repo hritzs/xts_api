@@ -2,8 +2,11 @@
 Straddle Filter - Check if ATM straddle price > threshold
 """
 from utils.logger import logger
-from trading.option_chain import get_option_chain
-
+from trading.chain_provider import (
+    get_option_chain,        # build/fetch chain for a symbol
+    get_spot_details,        # fut_ltp, atm, gap, lot_size
+    set_xts_instances,       # called at startup
+)
 
 async def check_straddle_filter(
     symbol: str,
