@@ -42,13 +42,68 @@ async def send_zmq_request(command: str, payload: dict, timeout: int = 5000) -> 
 
 async def get_option_chain_from_service(symbol: str) -> Optional[Dict]:
     """Fetches the option chain from the dedicated market data service."""
-    response = await send_zmq_request("get_option_chain", {"symbol": symbol.upper()})
-    if response and response.get('success'):
-        return response.get('data')
-    else:
-        error = response.get('error', 'Unknown error')
-        logger.error(f"ZMQ error fetching option chain for {symbol}: {error}")
-        return None
+
+    response = await send_zmq_request(
+        "get_option_chain",
+        {"symbol": symbol.upper()}
+    )
+
+    logger.debug("=" * 120)
+    logger.debug("[RAW ZMQ RESPONSE]")
+
+    try:
+        data = response.get("data", {}) if response else {}
+
+        logger.info(
+            "[OPTION CHAIN RECEIVED] "
+            f"symbol={data.get('symbol')} "
+            f"expiry={data.get('expiry')} "
+            f"strikes={len(data.get('chain', []))}"
+        )
+
+        chain = data.get("chain", [])
+        if chain:
+            logger.info(
+                "[OPTION CHAIN ATM] "
+                f"Strike={chain[0].get('strike')} "
+                f"CE={chain[0].get('ce_ltp')} "
+                f"PE={chain[0].get('pe_ltp')}"
+            )
+
+    except Exception as e:
+        logger.debug(f"Unable to summarize response: {e}")
+
+    logger.debug("=" * 120)
+
+    if response and response.get("success"):
+
+        chain = response.get("data")
+
+        logger.debug("=" * 120)
+        logger.info("[OPTION CHAIN RECEIVED]")
+
+        logger.debug(f"Top Keys : {list(chain.keys())}")
+
+        rows = chain.get("chain", [])
+
+        logger.debug(f"Rows : {len(rows)}")
+
+        if rows:
+
+            logger.debug("=" * 80)
+            logger.info("FIRST ROW")
+
+            for k, v in rows[0].items():
+                logger.debug(f"{k:<35} = {v}")
+
+            logger.debug("=" * 80)
+
+        return chain
+
+    error = response.get("error", "Unknown error")
+    logger.error(f"ZMQ error fetching option chain for {symbol}: {error}")
+
+    return None
 
 async def get_spot_details_from_service(symbol: str) -> Optional[Dict]:
     """Fetches spot details from the dedicated market data service."""
@@ -75,13 +130,42 @@ async def get_ltp_from_service(token: int, segment: int = config.EXCHANGE_NSEFO)
 
 async def get_bulk_market_depth_from_service(instruments: List[Dict]) -> Dict[int, Dict]:
     """Fetches market depth for multiple tokens from the Market Data Microservice."""
+    if not instruments:
+        logger.warning("ZMQ bulk market depth request skipped: no instruments provided.")
+        return {}
+
+    logger.debug(f"📤 [market_data.data_client] ZMQ bulk-depth request count={len(instruments)} "
+        f"sample={instruments[:3]}"
+    )
+
     response = await send_zmq_request("get_bulk_market_depth", {"instruments": instruments})
-    if response and response.get('success'):
-        # ZMQ response keys are strings
-        return {int(k): v for k, v in response.get('data', {}).items()}
+
+    success = bool(response and response.get("success"))
+    payload = (response or {}).get("data", {}) or {}
+    error = (response or {}).get("error")
+
+    logger.info(
+        # f"📥 [market_data.data_client] ZMQ bulk-depth response success={success} "
+        f"items={len(payload)} error={error}"
+    )
+
+    if success:
+        normalized = {int(k): v for k, v in payload.items()}
+        first_key = next(iter(normalized), None)
+        if first_key is not None:
+            logger.info(
+                f"✅ [market_data.data_client] first depth item token={first_key}"
+            )
+        else:
+            logger.warning(
+                f"ZMQ bulk depth returned 0 items for {len(instruments)} instruments "
+                f"| raw={str(response)[:1500]}"
+            )
+        return normalized
     else:
-        error = response.get('error', 'Unknown error')
-        logger.warning(f"ZMQ error fetching bulk market depth: {error}")
+        logger.warning(
+            f"ZMQ error fetching bulk market depth: {error} | raw={str(response)[:1500]}"
+        )
         return {}
 
 async def get_bulk_ltp_from_service(tokens: List[int]) -> Dict[int, float]:
@@ -116,24 +200,16 @@ async def market_data_service_listener():
 
             if msg_type == 'price_update':
                 prices = message.get('data', {})
+                ts = message.get('ts')
                 if prices:
-                    for token, ltp in prices.items():
-                        state.update_price(int(token), float(ltp))
-                    
-                    logger.debug(f"Received {len(prices)} price updates via ZMQ.")
-                    from background.tasks import broadcast_message
-                    asyncio.create_task(broadcast_message({'type': 'price_update', 'data': prices}))
-            
-            elif msg_type == 'option_chain_update':
-                symbol = message.get('symbol')
-                chain_data = message.get('data')
-                if symbol and chain_data:
-                    if state.option_chains is None:
-                        state.option_chains = {}
-                    state.update_option_chain(symbol, chain_data)
-                    logger.info(f"Received and updated option chain for {symbol} via ZMQ.")
-                    from background.tasks import broadcast_message
-                    asyncio.create_task(broadcast_message({'type': 'option_chain_update', 'data': chain_data}))
+                    state.bulk_update_prices({int(token): float(ltp) for token, ltp in prices.items()}, ts=ts)
+
+            elif msg_type == 'depth_update':
+                depth_map = message.get('data', {})
+                ts = message.get('ts')
+                if depth_map:
+                    normalized = {int(token): depth for token, depth in depth_map.items()}
+                    state.bulk_update_market_depth(normalized, ts=ts)
 
         except asyncio.CancelledError:
             logger.info("Market data listener cancelled.")

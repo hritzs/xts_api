@@ -44,10 +44,10 @@ from background.tasks import (
     monitor_xts_socket_status,
     cleanup_old_data,
     snapshot_bridge_loop,
+    capture_918_synthetic_price_loop,
     reconciliation_listener,
     marketdata_bridge_loop,          # ← ADD THIS LINE
 )
-
 
 from api.routes import router as api_router
 from api.websocket import websocket_endpoint, websocket_clients
@@ -57,87 +57,64 @@ import cred
 # XTS imports
 from Connect import XTSConnect
 
-
 # --- Pydantic Models for API ---
-class UpdateConfigRequest(BaseModel):
-    sl_bps: float
-    sl_start_time: str
-    hedge_div: int
-    straddle_div: int
-    hedge_start_time: str
-    roll_straddle_div: int
-    roll_start_time: str
-    exit_time: str
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# GLOBAL INSTANCES
-# ══════════════════════════════════════════════════════════════════════════════
-
-xt_i = None          # Interactive API (orders)
-event_bus = None     # Event coordination bus
-background_tasks = []  # Track background tasks for cleanup
 
 def is_port_in_use(port: int) -> bool:
     """Check if a port is already in use on localhost."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('localhost', port)) == 0
 
-
 async def restore_active_trades():
     """
     On startup, find all active trades and restart their monitoring.
     """
-    logger.info("="*100)
+    logger.debug("=" * 100)
     logger.info("🔄 RESTORING ACTIVE TRADES...")
-    logger.info("="*100)
-    
+    logger.debug("=" * 100)
+
     try:
-        # Defer import to avoid potential circular dependency issues at startup
-        from trading.trade_manager import get_trade_manager
-        from trading.square_off import square_off_by_trade_uid
+        from trading.trade_process import trade_process_worker_entry
 
         all_trades_today = state.db.get_todays_straddles()
         if not all_trades_today:
             logger.info("✅ No active trades to restore.")
             return
 
-        # --- RESUMPTION LOGIC ---
-        # Identify trades that are active or were interrupted mid-action.
-        resumable_statuses = ['ACTIVE', 'PARTIAL', 'SQUARING-OFF', 'PARTIAL-SQF', 'HEDGING', 'ROLLING', 'BUILDING']
+        resumable_statuses = [
+            'ACTIVE', 'PARTIAL', 'SQUARING-OFF', 'PARTIAL-SQF',
+            'HEDGING', 'ROLLING', 'BUILDING'
+        ]
         trades_to_restore = [t for t in all_trades_today if t.get('status') in resumable_statuses]
-        
+
         if not trades_to_restore:
             logger.info("✅ No active or resumable trades found.")
             return
 
         logger.info(f"📊 Found {len(trades_to_restore)} trades to restore (active or interrupted).")
-        
+
         for trade in trades_to_restore:
             trade_uid = trade.get('trade_uid')
             status = trade.get('status')
             if not trade_uid:
                 continue
-            
+
             logger.info(f"   -> Spawning process for {trade_uid} (Status: {status})...")
-            
-            # Spawn a process for the existing trade
+
             command_q = multiprocessing.Queue()
-            # snapshot_q = multiprocessing.Queue()
-            
+
             process = multiprocessing.Process(
                 target=trade_process_worker_entry,
-                args=(trade_uid, trade, command_q, state.option_chains, state.trade_data_cache, [])
+                args=(trade_uid, trade, command_q, state.trade_data_cache, [])
             )
             process.start()
-            
+
             state.trade_processes[trade_uid] = {
-                'process': process,
-                'command_q': command_q
+                'pid': process.pid,
+                'status': status,
             }
-            
-            # The worker process will handle its own state, including re-triggering actions if needed.
-            
+            state.local_process_refs[trade_uid] = process
+            state.local_command_queues[trade_uid] = command_q
+
     except Exception as e:
         logger.error(f"❌ Failed to restore active trades: {e}", exc_info=True)
 
@@ -169,6 +146,16 @@ async def _post_startup_tasks():
         logger.info("   ⏳ Waiting 2s for services to stabilize before restoring trades...")
         await asyncio.sleep(2)
 
+        # --- Pre-build all configured option chains ---
+        from trading.data_client import get_option_chain_from_service
+        from trading.chain_provider import SYMBOL_CONFIG
+        logger.info("   Pre-building all configured option chains (NIFTY, SENSEX, etc.)...")
+        build_tasks = []
+        for symbol in SYMBOL_CONFIG.keys():
+            logger.info(f"      -> Triggering build for {symbol}")
+            build_tasks.append(get_option_chain_from_service(symbol))
+        await asyncio.gather(*build_tasks, return_exceptions=True)
+
         # Subscribe to active straddle tokens
         await subscribe_active_straddles()
 
@@ -190,6 +177,9 @@ async def lifespan(app: FastAPI):
     - Shutdown: Graceful cleanup of all resources
     """
     global xt_i, event_bus, background_tasks
+    background_tasks = []
+
+    background_tasks = []
 
     logger.info("="*100)
     logger.info("🚀 STARTING LIVE STRADDLE TRADING DASHBOARD")
@@ -207,24 +197,29 @@ async def lifespan(app: FastAPI):
         # STEP 2: SHARED DATA & PROCESS MANAGEMENT
         # ══════════════════════════════════════════════════════════════════
         logger.info("🧠 Step 2/8: Initializing Shared Data and Process Manager...")
-        state.shared_data = SharedDataManager(create=True)
-        state.trade_processes = {}
-        state.prices = state.shared_data.prices_array
-        # The reconciler will write to these, the main app will read.
-        state.shared_data.order_book_cache = state.shared_data.manager.dict()
-        state.shared_data.verified_trades = state.shared_data.manager.dict()
-        state.option_chains = state.shared_data.option_chains_proxy
-        state.trade_data_cache = state.shared_data.trade_data_cache_proxy
-        state.cancellation_flags = {}
-        if not hasattr(state, 'trade_snapshots'):
-            state.trade_snapshots = {}
-        if not hasattr(state, 'temp_order_cache'):
-            state.temp_order_cache = {}
-        logger.info("✅ Shared data structures ready")
+        try:
+            logger.info(f"[SHARED DATA CREATOR] file={__file__}")
+            state.shared_data = SharedDataManager(create=True)
+            logger.info("[SHARED DATA INITIALIZED] SharedDataManager(create=True) completed successfully")
+            
+            state.trade_processes = multiprocessing.Manager().dict()
+            state.local_process_refs = {}
+            state.local_command_queues = {}
+            state.prices = state.shared_data.prices_array
+            state.shared_data.order_book_cache = state.shared_data.manager.dict()
+            state.shared_data.verified_trades = state.shared_data.manager.dict()
+            state.option_chains = state.shared_data.option_chains_proxy
+            state.trade_data_cache = state.shared_data.trade_data_cache_proxy
+            state.cancellation_flags = {}
+            if not hasattr(state, 'trade_snapshots'):
+                state.trade_snapshots = {}
+            if not hasattr(state, 'temp_order_cache'):
+                state.temp_order_cache = {}
+            logger.info("✅ Shared data structures ready")
+        except Exception as e:
+            logger.exception(f"❌ Shared data manager initialization failed: {e}")
+            raise
 
-        # ══════════════════════════════════════════════════════════════════
-        # STEP 3: XTS INTERACTIVE API LOGIN
-        # ══════════════════════════════════════════════════════════════════
         logger.info("🔐 Step 3/8: Logging into XTS Interactive API...")
 
         xt_i = XTSConnect(cred.API_KEY_I, cred.API_SECRET_I, "WEBAPI")
@@ -347,6 +342,12 @@ async def lifespan(app: FastAPI):
         )
         logger.info("   ✅ Reconciliation listener started (ZMQ/SHM)")
 
+        # 9:18 Price Capture
+        background_tasks.append(
+            asyncio.create_task(capture_918_synthetic_price_loop())
+        )
+        logger.info("   ✅ 9:18 Synthetic Price Capture task started")
+
         logger.info("✅ Background tasks running")
 
         # ══════════════════════════════════════════════════════════════════
@@ -398,12 +399,17 @@ async def lifespan(app: FastAPI):
     try:
         # 1. Stop all trade worker processes gracefully
         logger.info("🛑 Stopping all trade worker processes...")
-        for trade_uid, process_info in list(state.trade_processes.items()):
+        for trade_uid, process_info in list(state.local_process_refs.items()):
             try:
-                process_info['command_q'].put({'command': 'STOP'})
-                process_info['process'].join(timeout=10)
-                if process_info['process'].is_alive():
-                    process_info['process'].terminate()
+                # Get the queue from the shared manager dict
+                # Get the queue from the local command queue registry
+                command_q = state.local_command_queues.get(trade_uid)
+                if command_q:
+                    command_q.put({'command': 'STOP'})
+
+                process_info.join(timeout=10)
+                if process_info.is_alive():
+                    process_info.terminate()
                     logger.warning(f"   ⚠️  Force-terminated process for {trade_uid}")
                 else:
                     logger.info(f"   ✅ Process for {trade_uid} stopped gracefully")
@@ -465,7 +471,6 @@ async def lifespan(app: FastAPI):
         import traceback
         logger.error(traceback.format_exc())
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # FASTAPI APPLICATION
 # ══════════════════════════════════════════════════════════════════════════════
@@ -476,7 +481,6 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MIDDLEWARE
@@ -500,90 +504,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Include API routes
-app.include_router(api_router)
-
-@app.post("/api/straddle/update-config/{trade_uid}")
-async def api_update_trade_config(trade_uid: str, request: UpdateConfigRequest):
-    """
-    API endpoint to update the configuration of a live trade.
-    Dispatches a command to the corresponding trade process.
-    """
-    # --- FIX: Handle PENDING trades by updating the DB directly ---
-    loop = asyncio.get_event_loop()
-    trade = await loop.run_in_executor(None, state.db.get_straddle_by_id, trade_uid)
-    if not trade:
-        raise HTTPException(status_code=404, detail="Trade not found in DB.")
-
-    if trade.get('status') == 'PENDING':
-        logger.info(f"Updating config for PENDING trade {trade_uid} directly in DB.")
-        
-        # Reconstruct the 'monitors' object from the request
-        # --- FIX: Use .get() for safe access to nested dictionaries ---
-        current_monitors = trade.get('monitors', {})
-        sl_monitor = current_monitors.get('sl', {})
-        hedge_monitor = current_monitors.get('hedge', {})
-        roll_monitor = current_monitors.get('roll', {})
-
-        new_monitors_config = {
-            'sl': {
-                'sl_bps': request.sl_bps, 
-                'start_time': request.sl_start_time, 
-                'interval': sl_monitor.get('interval', 60.0), # Keep existing interval or use default
-                'running': False, 
-                'sl_points': 0
-            },
-            'hedge': {
-                'hedge_div': request.hedge_div, 
-                'straddle_div': request.straddle_div, 
-                'start_time': request.hedge_start_time, 
-                'interval': hedge_monitor.get('interval', 60.0), # Keep existing interval
-                'running': False
-            },
-            'roll': {
-                'roll_straddle_div': request.roll_straddle_div, 
-                'start_time': request.roll_start_time, 
-                'interval': roll_monitor.get('interval', 60.0), # Keep existing interval
-                'running': False
-            },
-            'square_off': {
-                'exit_time': request.exit_time, 
-                'running': False
-            }
-        }
-        
-        trade['monitors'] = new_monitors_config
-        trade['config'].update(request.dict()) # Update the flat config as well
-        
-        await loop.run_in_executor(None, state.db.insert_straddle, trade)
-        
-        return {'success': True, 'message': 'Pending trade configuration updated successfully.'}
-    # --- END FIX ---
-
-    if trade_uid in state.trade_processes:
-        logger.info(f"Dispatching UPDATE_CONFIG command to process for trade {trade_uid}.")
-        process_info = state.trade_processes[trade_uid]
-        if not process_info['process'].is_alive():
-            logger.error(f"Process for trade {trade_uid} is not alive. Cannot update config.")
-            # Clean up dead process
-            if trade_uid in state.trade_processes:
-                del state.trade_processes[trade_uid]
-            raise HTTPException(status_code=404, detail="Trade process is not running.")
-        
-        # Send the new config to the trade's dedicated process
-        process_info['command_q'].put({
-            'command': 'UPDATE_CONFIG',
-            'data': request.dict()
-        })
-        return {'success': True, 'message': 'Configuration update command dispatched.'}
-    else:
-        logger.error(f"Process for trade {trade_uid} not found. Cannot update config.")
-        raise HTTPException(status_code=404, detail="Trade process not found.")
+app.include_router(api_router, prefix="/api")
 
 @app.post("/api/trade/sync/{trade_uid}", tags=["Trade Management"])
 async def sync_trade_orders(trade_uid: str):
@@ -603,13 +529,11 @@ async def sync_trade_orders(trade_uid: str):
         logger.error(f"API sync failed for {trade_uid}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-
 # WebSocket endpoint
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     """WebSocket endpoint for live updates"""
     await websocket_endpoint(websocket)
-
 
 # Mount static files
 try:
@@ -617,7 +541,6 @@ try:
     logger.info("✅ Static files mounted: /static")
 except Exception as e:
     logger.warning(f"⚠️  Static files not mounted: {e}")
-
 
 # Serve dashboard HTML
 @app.get("/", response_class=HTMLResponse)
@@ -641,7 +564,6 @@ async def get_dashboard():
             """,
             status_code=404
         )
-
 
 # Health check endpoint
 @app.get("/health")
@@ -669,7 +591,6 @@ async def health_check():
         "event_bus": "active" if event_bus and event_bus.running else "inactive",
         "version": "3.0.0"
     }
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN ENTRY POINT

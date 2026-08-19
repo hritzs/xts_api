@@ -1,0 +1,380 @@
+async def build_straddle(
+    symbol: str,
+    lots: int,
+    trade_uid: str = None,
+    delta_neutral: bool = True,
+    product_type: str = "MIS",
+    strike_range: int = 15,
+    trade_config: Dict = None,
+    target_expiry: str = None,
+    ce_strike_price: int = None,
+    pe_strike_price: int = None
+) -> Optional[Dict]:
+    """
+    BUILD ATM STRADDLE (DELTA-NEUTRAL)
+    """
+    start_time = get_ist_now()
+
+    try:
+        if trade_config is None:
+            trade_config = {}
+
+        trade_config.setdefault("entry_at_straddle", None)
+        trade_config.setdefault("exit_at_straddle", None)
+
+
+        symbol_upper = symbol.upper()
+        loop = asyncio.get_running_loop()
+
+        now = get_ist_now()
+        next_minute_start = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+        next_minute_str = next_minute_start.strftime('%H:%M:%S')
+
+        if 'entry_time' not in trade_config or not trade_config.get('entry_time'):
+            trade_config['entry_time'] = next_minute_str
+        if 'sl_start_time' not in trade_config or not trade_config.get('sl_start_time'):
+            trade_config['sl_start_time'] = next_minute_str
+        if 'hedge_start_time' not in trade_config or not trade_config.get('hedge_start_time'):
+            trade_config['hedge_start_time'] = next_minute_str
+        if 'roll_start_time' not in trade_config or not trade_config.get('roll_start_time'):
+            trade_config['roll_start_time'] = next_minute_str
+        if 'exit_time' not in trade_config or not trade_config.get('exit_time'):
+            trade_config['exit_time'] = '15:27:00'
+
+        if not trade_uid:
+            now = get_ist_now()
+            entry_time_str = trade_config.get('entry_time')
+            if entry_time_str:
+                try:
+                    et = datetime.strptime(entry_time_str, "%H:%M:%S").time()
+                    timestamp = datetime.combine(now.date(), et).strftime("%d%m%y%H%M%S")
+                except ValueError:
+                    try:
+                        et = datetime.strptime(entry_time_str, "%H:%M").time()
+                        timestamp = datetime.combine(now.date(), et).strftime("%d%m%y%H%M%S")
+                    except ValueError:
+                        timestamp = now.strftime("%d%m%y%H%M%S")
+            else:
+                timestamp = now.strftime("%d%m%y%H%M%S")
+
+            SYMBOL_PREFIXES = {
+                "NIFTY": "ny",
+                "SENSEX": "sx",
+                "BANKNIFTY": "bn",
+                "FINNIFTY": "fn",
+                "MIDCPNIFTY": "mc",
+            }
+            sorted_keys = sorted(SYMBOL_PREFIXES.keys(), key=len, reverse=True)
+            prefix = next(
+                (SYMBOL_PREFIXES[key] for key in sorted_keys if key in symbol_upper),
+                symbol[:2].lower()
+            )
+            base_trade_uid = f"{prefix}{timestamp}"
+
+            suffix_counter = 0
+            trade_uid = f"{base_trade_uid}{chr(ord('a') + suffix_counter)}"
+            while (
+                trade_uid in state.trade_processes or
+                await loop.run_in_executor(None, state.db.get_straddle_by_id, trade_uid)
+            ):
+                suffix_counter += 1
+                trade_uid = f"{base_trade_uid}{chr(ord('a') + suffix_counter)}"
+
+            logger.info(f"Generated unique trade_uid: {trade_uid}")
+
+        executor = get_order_executor()
+        if not executor:
+            logger.error("OrderExecutor not initialized")
+            return None
+
+        logger.info("=" * 100)
+        logger.info(f"BUILD STRADDLE | Trade UID: {trade_uid}")
+        if delta_neutral:
+            logger.info("DELTA-NEUTRAL MODE: Calculating unequal PE/CE quantities")
+        logger.info("=" * 100)
+
+        if target_expiry:
+            logger.info(f"Building a specific chain for target expiry: {target_expiry}")
+            chain_data = await loop.run_in_executor(None, get_option_chain, symbol, strike_range, target_expiry)
+            chain_data = _publish_chain_if_needed(symbol_upper, chain_data)
+        else:
+            chain_data = None
+            if hasattr(state, 'get_published_option_chain'):
+                chain_data = state.get_published_option_chain(symbol_upper)
+
+            if not chain_data:
+                logger.info(f"Published chain cache miss for {symbol_upper}. Fetching from service...")
+                fetched_chain = await get_option_chain_from_service(symbol_upper)
+                if fetched_chain:
+                    chain_data = _publish_chain_if_needed(symbol_upper, fetched_chain)
+
+        if not chain_data:
+            logger.error(
+                f"Published option chain for {symbol_upper} not found. "
+                "The builder has no canonical snapshot to work from. Aborting build."
+            )
+            return None
+
+        chain_publish_seq = chain_data.get('publish_seq')
+        chain_published_at = chain_data.get('published_at')
+
+        logger.info(
+            f"[{trade_uid}] Using published chain for {symbol_upper} | "
+            f"publish_seq={chain_publish_seq}, published_at={chain_published_at}"
+        )
+
+        exchange_segment = chain_data.get('exchange_segment', config.EXCHANGE_NSEFO)
+        exchange_name = {2: "NSE", 12: "BSE", 1: "NSECM", 11: "BSECM"}.get(
+            exchange_segment, f"SEG{exchange_segment}"
+        )
+        logger.info(f"Exchange: {exchange_name} (Segment: {exchange_segment})")
+
+        is_custom_strike = ce_strike_price is not None and pe_strike_price is not None
+
+        if is_custom_strike:
+            logger.info(
+                f"Building custom position with CE Strike: {ce_strike_price} "
+                f"and PE Strike: {pe_strike_price}"
+            )
+            ce_row = next((row for row in chain_data['chain'] if row['strike'] == ce_strike_price), None)
+            pe_row = next((row for row in chain_data['chain'] if row['strike'] == pe_strike_price), None)
+
+            if not ce_row:
+                logger.error(f"CE Strike {ce_strike_price} not found in option chain for {symbol}.")
+                return {'success': False, 'error': f"CE Strike {ce_strike_price} not found"}
+
+            if not pe_row:
+                logger.error(f"PE Strike {pe_strike_price} not found in option chain for {symbol}.")
+                return {'success': False, 'error': f"PE Strike {pe_strike_price} not found"}
+
+            atm = ce_strike_price if ce_strike_price == pe_strike_price else f"{pe_strike_price}/{ce_strike_price}"
+        else:
+            logger.info("Building ATM straddle (default).")
+            atm = chain_data['atm']
+            atm_row = next((row for row in chain_data['chain'] if row.get('is_atm')), None)
+            if not atm_row:
+                atm_row = next((row for row in chain_data['chain'] if row.get('strike') == atm), None)
+            if not atm_row:
+                logger.error("ATM strike not found")
+                return None
+            ce_row = pe_row = atm_row
+
+        lot_size = chain_data.get("lot_size")
+        if not lot_size or lot_size <= 0:
+            logger.error(f"Invalid or missing lot size in option chain for {symbol}. Aborting build.")
+            return None
+
+        ce_token = ce_row.get('ce_token')
+        pe_token = pe_row.get('pe_token')
+        ce_symbol = ce_row.get('ce_symbol')
+        pe_symbol = pe_row.get('pe_symbol')
+
+        if (ce_token and not isinstance(ce_token, int)) or (pe_token and not isinstance(pe_token, int)):
+            logger.critical(
+                f"CRITICAL DATA CORRUPTION DETECTED in option chain for {symbol}. "
+                f"CE Token: '{ce_token}' (type: {type(ce_token)}), "
+                f"PE Token: '{pe_token}' (type: {type(pe_token)}). "
+                "This should be an integer. Aborting build."
+            )
+            return None
+
+        ce_ltp = ce_row.get('ce_ltp', 0.0)
+        pe_ltp = pe_row.get('pe_ltp', 0.0)
+
+        current_straddle = ce_ltp + pe_ltp
+
+        logger.info("="*100)
+        logger.info("[ENTRY STRADDLE INPUT]")
+        entry_target = trade_config.get("entry_at_straddle")
+        logger.info(f"Config Value : {entry_target}")
+        logger.info(f"Current      : {current_straddle}")
+        logger.info("="*100)
+
+        if ce_ltp <= 0 or pe_ltp <= 0:
+            logger.error(f"Invalid LTP: CE={ce_ltp}, PE={pe_ltp}")
+            return None
+
+        ce_delta = ce_row.get('ce_delta', 0.5)
+        pe_delta = pe_row.get('pe_delta', -0.5)
+
+        base_symbol = next(
+            (key for key in sorted(SYMBOL_CONFIG.keys(), key=len, reverse=True) if key in symbol_upper),
+            None
+        )
+        sym_config = SYMBOL_CONFIG.get(base_symbol, {})
+        max_order_qty = sym_config.get('max_order_qty', config.MAX_ORDER_QTY)
+        logger.info(f"Using MaxOrderQty: {max_order_qty} for {symbol}")
+
+        if delta_neutral and ce_delta != 0 and pe_delta != 0:
+            logger.info("=" * 100)
+            logger.info("DELTA-NEUTRAL CALCULATION")
+            logger.info("=" * 100)
+            logger.info(f"CE Delta: {ce_delta:.6f}")
+            logger.info(f"PE Delta: {pe_delta:.6f}")
+            logger.info(f"Baseline lots: {lots}")
+
+            target_contracts = lots * lot_size
+            pe_lots, ce_lots, pe_contracts, ce_contracts, net_delta = calculate_delta_neutral_quantities(
+                ce_option_delta=ce_delta,
+                pe_option_delta=pe_delta,
+                target_contracts=target_contracts,
+                lotsize=lot_size
+            )
+            synthetic_spot = float(chain_data.get("synthetic_spot") or 0.0)
+            fut_ltp = float(chain_data.get("fut_ltp") or 0.0)
+            reference_spot = synthetic_spot if synthetic_spot > 0 else fut_ltp
+
+            logger.info("=" * 100)
+            logger.info("DELTA-NEUTRAL ALLOCATION:")
+            logger.info(f"   Synthetic Spot: {synthetic_spot:.2f}" if synthetic_spot > 0 else "   Synthetic Spot: N/A")
+            logger.info(f"   Fut LTP: {fut_ltp:.2f}" if fut_ltp > 0 else "   Fut LTP: N/A")
+            logger.info(f"   Reference Spot Used: {reference_spot:.2f}" if reference_spot > 0 else "   Reference Spot Used: N/A")
+            logger.info(f"   PE: {pe_contracts} contracts ({pe_lots} lots)")
+            logger.info(f"   CE: {ce_contracts} contracts ({ce_lots} lots)")
+            logger.info(f"   Net Delta: {net_delta:.4f}")
+            logger.info("=" * 100)
+        else:
+            pe_lots = lots
+            ce_lots = lots
+            pe_contracts = lots * lot_size
+            ce_contracts = lots * lot_size
+            net_delta = 0.0
+            logger.info("=" * 100)
+            logger.info("EQUAL ALLOCATION:")
+            logger.info(f"   PE: {pe_contracts} contracts ({pe_lots} lots)")
+            logger.info(f"   CE: {ce_contracts} contracts ({ce_lots} lots)")
+            logger.info("=" * 100)
+
+        target_ce_qty = int(ce_contracts)
+        target_pe_qty = int(pe_contracts)
+
+        total_quantity = target_pe_qty + target_ce_qty
+        logger.info(f"[{exchange_name}] {symbol} ATM {atm} | Total Qty: {total_quantity}")
+        logger.info(f"CE: {ce_token} @ {ce_ltp:.2f} x {target_ce_qty}")
+        logger.info(f"PE: {pe_token} @ {pe_ltp:.2f} x {target_pe_qty}")
+
+        legs_data_for_batching = []
+        if ce_lots > 0:
+            legs_data_for_batching.append({
+                'token': ce_token,
+                'option_type': 'CE',
+                'action': 'SELL',
+                'total_lots': ce_lots,
+                'lot_size': lot_size,
+                'expected_price': ce_ltp,
+                'exchange_segment': exchange_segment,
+                'product_type': product_type,
+                'build_role': 'BUILD_CE',
+                'trade_uid': trade_uid,
+            })
+        if pe_lots > 0:
+            legs_data_for_batching.append({
+                'token': pe_token,
+                'option_type': 'PE',
+                'action': 'SELL',
+                'total_lots': pe_lots,
+                'lot_size': lot_size,
+                'expected_price': pe_ltp,
+                'exchange_segment': exchange_segment,
+                'product_type': product_type,
+                'build_role': 'BUILD_PE',
+                'trade_uid': trade_uid,
+            })
+
+        order_lots_per_call = trade_config.get('order_lots_per_call') if trade_config else None
+        logger.info(
+            "BUILD chunking: "
+            f"{'MANUAL order_lots_per_call=' + str(order_lots_per_call) if order_lots_per_call else 'RANGE-AUTO ceil(' + str(lots) + '/100)'} "
+            f"| lots={lots}"
+        )
+
+        all_chunks = generate_chunked_orders(
+            trade_uid_prefix=f"B{trade_uid}",
+            legs_data=legs_data_for_batching,
+            base_lots_for_trade=lots,
+            max_order_qty=max_order_qty,
+            order_lots_per_call=order_lots_per_call,
+        )
+
+        default_buffer = 6.0 if "SENSEX" in symbol_upper else 2.0
+        buy_buffer = float(trade_config.get('buy_buffer', default_buffer)) if trade_config else default_buffer
+        sell_buffer = float(trade_config.get('sell_buffer', default_buffer)) if trade_config else default_buffer
+
+        for chunk in all_chunks:
+            for order in chunk:
+                order['build_role'] = _classify_order_role(order, ce_token, pe_token)
+                order['order_role'] = order['build_role']
+                order['trade_uid'] = trade_uid
+                if order.get('action', '').upper() == 'BUY':
+                    order['limit_order_buffer'] = buy_buffer
+                else:
+                    order['limit_order_buffer'] = sell_buffer
+                    
+        chunk_targets = [
+            _get_chunk_target_quantities(chunk, ce_token, pe_token)
+            for chunk in all_chunks
+        ]
+
+        for idx, tgt in enumerate(chunk_targets, start=1):
+            logger.info(
+                f"[{trade_uid}] Chunk target {idx}/{len(chunk_targets)} | "
+                f"CE={tgt['ce_target_qty']}, PE={tgt['pe_target_qty']}"
+            )
+
+        
+
+        straddle_price_filter = float(trade_config.get('straddle_filter', 0.0)) if trade_config else 0.0
+
+        stop_pct_raw = trade_config.get('straddle_stop_loss_pct', 0.0) if trade_config else 0.0
+        try:
+            straddle_stop_pct = float(stop_pct_raw) if stop_pct_raw != "" else 0.0
+        except (ValueError, TypeError):
+            straddle_stop_pct = 0.0
+
+        stop_price_threshold = 0.0
+        if straddle_price_filter > 0:
+            stop_price_threshold = straddle_price_filter * (1 - (straddle_stop_pct / 100.0))
+            logger.info(f"Straddle price stop threshold enabled: < ₹{stop_price_threshold:.2f}")
+
+        logger.info(f"Generated {len(all_chunks)} chunks for execution.")
+
+        entry_target = trade_config.get("entry_at_straddle")
+
+        if entry_target in ("", None, 0, "0"):
+            entry_target = None
+
+        if entry_target not in (None, "", 0):
+
+            try:
+                entry_target = float(entry_target)
+            except Exception:
+                entry_target = None
+
+        
+        if entry_target is None:
+
+            logger.info("[ENTRY STRADDLE] No target configured. Entering immediately.")
+
+        else:
+
+            logger.info("=" * 100)
+            logger.info(
+                f"[ENTRY CHECK] "
+                f"Current={current_straddle:.2f} | "
+                f"Target={entry_target:.2f}"
+            )
+            logger.info(
+                f"Current >= Target : {current_straddle >= entry_target}"
+            )
+            logger.info(
+                f"Current < Target  : {current_straddle < entry_target}"
+            )
+            logger.info("=" * 100)
+
+            #
+            # Wait until premium REACHES the desired entry.
+            #
+            if current_straddle < entry_target:
+
+                logger.info("[WAITING FOR ENTRY STRADDLE]")
+

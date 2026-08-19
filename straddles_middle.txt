@@ -1,0 +1,540 @@
+        if (flashClass) {
+            cell.classList.add(flashClass);
+            setTimeout(() => cell.classList.remove(flashClass), 700);
+        }
+    });
+
+    previousPrices[token] = ltp;
+    // NOTE: updateStraddlePremium() removed — does not exist here.
+    //       option_chain.js manages its own premium display via window._lastPrices.
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// FETCH + RENDER STRADDLES
+// ════════════════════════════════════════════════════════════════════════════
+
+async function fetchStraddles(isPortfolioView = false) {
+    const divId      = isPortfolioView ? 'portfolio-positions-display' : 'straddles-display';
+    const displayDiv = document.getElementById(divId);
+    if (!displayDiv) return;
+    if (isPortfolioView) displayDiv.classList.add('scrollable');
+
+    try {
+        const response = await fetch('/api/straddles');
+        const data     = await response.json();
+        if (data.success) {
+            isPortfolioView
+                ? displayPortfolioPositions(data.straddles)
+                : displayStraddles(data.straddles);
+        } else {
+            displayDiv.innerHTML = `<div class="placeholder">❌ ${data.error}</div>`;
+        }
+    } catch (error) {
+        displayDiv.innerHTML = `<div class="placeholder">❌ ${error.message}</div>`;
+    }
+}
+
+// ── Terminal compact view ─────────────────────────────────────────────────────
+
+function displayStraddles(straddles) {
+    const displayDiv = document.getElementById('straddles-display');
+    if (!displayDiv) return;
+
+    if (!straddles || straddles.length === 0) {
+        displayDiv.innerHTML = '<div class="placeholder">No active positions</div>';
+        return;
+    }
+
+    let html = `<table><thead><tr>
+        <th>UID</th><th>Symbol</th><th>Strike</th><th>CE Qty</th><th>PE Qty</th>
+        <th>Status</th><th>Net Δ</th><th>PnL</th><th>Actions</th>
+    </tr></thead><tbody>`;
+
+    straddles.forEach(straddle => {
+        const statusUpper  = (straddle.status || '').toUpperCase();
+        const statusClass  = statusUpper === 'BUILDING' ? 'yellow'
+            : (ACTIVE_LIKE_STATUSES.includes(statusUpper) ? 'positive' : 'neutral');
+        const pnlClass     = (straddle.live_pnl || 0) >= 0 ? 'positive' : 'negative';
+        const tradeUid     = straddle.trade_uid || straddle.straddle_id;
+        const liveNetDelta = straddle.live_net_delta || straddle.net_delta || 0;
+
+        html += `
+            <tr data-trade-uid="${tradeUid}"
+                onclick="showStraddleDetails('${tradeUid}', this)"
+                style="cursor:pointer;">
+                <td>${tradeUid.slice(-6)}</td>
+                <td>${straddle.symbol}</td>
+                <td>${straddle.strike}</td>
+                <td>${straddle.ce_quantity}</td>
+                <td>${straddle.pe_quantity}</td>
+                <td class="${statusClass}">${straddle.status}</td>
+                <td class="net-delta-cell">${liveNetDelta.toFixed(2)}</td>
+                <td class="pnl-cell ${pnlClass}">₹${(straddle.live_pnl || 0).toFixed(2)}</td>
+                <td class="actions-cell">
+                    ${ACTIVE_LIKE_STATUSES.includes(statusUpper) ? `
+                        <button class="btn-icon" title="Partial Square Off"
+                            onclick="event.stopPropagation(); partialSquareOffStraddle('${tradeUid}')">✂️</button>
+                        <button class="btn-icon" title="Full Square Off"
+                            onclick="event.stopPropagation(); squareOffStraddle('${tradeUid}', ${liveNetDelta})">❌</button>
+                    ` : ''}
+                </td>
+            </tr>`;
+    });
+
+    html += '</tbody></table>';
+    displayDiv.innerHTML = html;
+}
+
+// ── Portfolio detailed view ───────────────────────────────────────────────────
+
+function displayPortfolioPositions(straddles) {
+    const displayDiv = document.getElementById('portfolio-positions-display');
+    if (!displayDiv) return;
+
+    if (!straddles || straddles.length === 0) {
+        displayDiv.innerHTML = '<div class="placeholder">No active positions</div>';
+        return;
+    }
+
+    let html = `<table><thead><tr>
+        <th>UID</th><th>Symbol</th><th>Strike</th><th>Status</th>
+        <th>CE Qty</th><th>CE LTP</th><th>PE Qty</th><th>PE LTP</th>
+        <th>Net Δ</th><th>Pts Out</th><th>Pts Allowed</th>
+        <th>Unrealized</th><th>Realized</th><th>PnL/Straddle</th><th>Actions</th>
+    </tr></thead><tbody>`;
+
+    straddles.forEach(straddle => {
+        const statusUpper  = (straddle.status || '').toUpperCase();
+        const isClosed     = statusUpper.startsWith('CLOSED');
+        const isPending    = statusUpper === 'PENDING';
+        const tradeUid     = straddle.trade_uid || straddle.straddle_id;
+        const liveNetDelta = straddle.live_net_delta || straddle.net_delta || 0;
+
+        const unrealized_pnl   = isClosed || isPending ? 0 : (straddle.unrealized_pnl || 0);
+        const realized_pnl     = straddle.realized_pnl || 0;
+        const pnl_per_lot      = straddle.pnl_per_lot  || 0;
+        const pnlPerLotDisplay = isClosed || isPending ? '—' : pnl_per_lot.toFixed(2);
+        const net_delta_display = isClosed || isPending ? '—' : liveNetDelta.toFixed(2);
+
+        const ce_ltp_display = isClosed || isPending
+            ? '—' : `₹${(priceMap[straddle.ce_token || (straddle.live_positions?.find(p => p.option_type === "CE")?.token)] || straddle.ce_ltp || 0).toFixed(2)}`;
+        const pe_ltp_display = isClosed || isPending
+            ? '—' : `₹${(priceMap[straddle.pe_token || (straddle.live_positions?.find(p => p.option_type === "PE")?.token)] || straddle.pe_ltp || 0).toFixed(2)}`;
+
+        const pts_out        = isClosed || isPending ? 0 : (straddle.pts_out || 0);
+        const points_allowed = isClosed || isPending ? null : straddle.points_allowed;
+        const pts_allowed_display = (points_allowed !== null && points_allowed !== undefined)
+            ? points_allowed.toFixed(2) : '—';
+
+        let ptsOutClass = '';
+        if (!isClosed && !isPending && points_allowed > 0) {
+            const ratio = pts_out / points_allowed;
+            ptsOutClass = ratio >= 1.0 ? 'negative' : ratio >= 0.5 ? 'yellow' : 'positive';
+        }
+
+        const unrealizedPnlClass = unrealized_pnl >= 0 ? 'positive' : 'negative';
+        const realizedPnlClass   = realized_pnl   >= 0 ? 'positive' : 'negative';
+        const pnlPerLotClass     = pnl_per_lot     >= 0 ? 'positive' : 'negative';
+        const actionsHtml        = _buildActionsHtml(tradeUid, straddle.status, liveNetDelta);
+
+        html += `
+            <tr data-trade-uid="${tradeUid}"
+                onclick="showStraddleDetails('${tradeUid}', this)"
+                style="cursor:pointer;">
+                <td>${tradeUid.slice(-6)}</td>
+                <td>${straddle.symbol}</td>
+                <td class="strike-cell">${straddle.strike}</td>
+                <td class="${_statusClass(straddle.status)}">${straddle.status}</td>
+                <td>${straddle.ce_quantity || '—'}</td>
+                <td data-token="${straddle.ce_token}">${ce_ltp_display}</td>
+                <td>${straddle.pe_quantity || '—'}</td>
+                <td data-token="${straddle.pe_token}">${pe_ltp_display}</td>
+                <td class="net-delta-cell">${net_delta_display}</td>
+                <td class="pts-out-cell ${ptsOutClass}">${pts_out.toFixed(2)}</td>
+                <td class="pts-allowed-cell">${pts_allowed_display}</td>
+                <td class="unrealized-pnl-cell ${unrealizedPnlClass}">₹${unrealized_pnl.toFixed(2)}</td>
+                <td class="realized-pnl-cell ${realizedPnlClass}">₹${realized_pnl.toFixed(2)}</td>
+                <td class="pnl-per-lot-cell ${pnlPerLotClass}">₹${pnlPerLotDisplay}</td>
+                <td class="actions-cell">${actionsHtml}</td>
+            </tr>`;
+    });
+
+    html += '</tbody></table>';
+    displayDiv.innerHTML = html;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// LIVE UPDATE HANDLERS  (called by websocket.js)
+// ════════════════════════════════════════════════════════════════════════════
+
+function handlePnlBatchUpdate(updates) {
+    if (!updates || !Array.isArray(updates)) return;
+
+    updates.forEach(update => {
+        const tradeUid = update.trade_uid;
+        if (!tradeUid) return;
+
+        document.querySelectorAll(`tr[data-trade-uid="${tradeUid}"]`).forEach(row => {
+            const statusCell = row.querySelector('td:nth-child(4), td:nth-child(6)');
+            if (statusCell && statusCell.textContent.toUpperCase().startsWith('CLOSED')) return;
+
+            const deltaCell = row.querySelector('.net-delta-cell');
+            if (deltaCell && update.live_net_delta !== undefined)
+                deltaCell.textContent = update.live_net_delta.toFixed(2);
+
+            const pnlCell = row.querySelector('.pnl-cell');
+            if (pnlCell && update.live_pnl !== undefined) {
+                const pnl = update.live_pnl;
+                pnlCell.textContent = `₹${pnl.toFixed(2)}`;
+                pnlCell.className   = `pnl-cell ${pnl >= 0 ? 'positive' : 'negative'}`;
+            }
+
+            const unrealizedPnlCell = row.querySelector('.unrealized-pnl-cell');
+            if (unrealizedPnlCell && update.unrealized_pnl !== undefined) {
+                const v = update.unrealized_pnl;
+                unrealizedPnlCell.textContent = `₹${v.toFixed(2)}`;
+                unrealizedPnlCell.className   = `unrealized-pnl-cell ${v >= 0 ? 'positive' : 'negative'}`;
+            }
+
+            const pnlPerLotCell = row.querySelector('.pnl-per-lot-cell');
+            if (pnlPerLotCell && update.pnl_per_lot !== undefined) {
+                const v = update.pnl_per_lot;
+                pnlPerLotCell.textContent = `₹${v.toFixed(2)}`;
+                pnlPerLotCell.className   = `pnl-per-lot-cell ${v >= 0 ? 'positive' : 'negative'}`;
+            }
+
+            const ptsOutCell = row.querySelector('.pts-out-cell');
+            if (ptsOutCell && update.pts_out !== undefined) {
+                const pts_out     = update.pts_out;
+                const pts_allowed = update.points_allowed;
+
+                ptsOutCell.textContent = pts_out.toFixed(2);
+
+                const ptsAllowedCell = row.querySelector('.pts-allowed-cell');
+                if (ptsAllowedCell)
+                    ptsAllowedCell.textContent = (pts_allowed !== null && pts_allowed !== undefined)
+                        ? pts_allowed.toFixed(2) : '—';
+
+                let cls = '';
+                if (pts_allowed && pts_allowed > 0) {
+                    const ratio = pts_out / pts_allowed;
+                    cls = ratio >= 1.0 ? 'negative' : ratio >= 0.5 ? 'yellow' : 'positive';
+                }
+                ptsOutCell.className = `pts-out-cell ${cls}`;
+            }
+        });
+
+        if (update.position_ltps) {
+            for (const [token, ltp] of Object.entries(update.position_ltps))
+                updatePrice(parseInt(token), ltp);
+        }
+    });
+}
+
+// ── handleStraddleUpdate  (row-level in-place update) ────────────────────────
+
+function handleStraddleUpdate(data) {
+    const tradeUid = data.trade_uid;
+    if (!tradeUid) return;
+
+    const num = (v, fallback = 0) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+    };
+
+    const setTextIfPresent = (id, value, formatter = v => String(v)) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (value === null || value === undefined || value === '') {
+            el.textContent = '--';
+            return;
+        }
+        el.textContent = formatter(value);
+    };
+
+    const setClassIfPresent = (id, className) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.className = className;
+    };
+
+    // ── Terminal table ────────────────────────────────────────────────────────
+    const mainRow = document.querySelector(`#straddles-display tr[data-trade-uid="${tradeUid}"]`);
+    if (mainRow) {
+        const statusCell = mainRow.querySelector('td:nth-child(6)');
+        if (statusCell && statusCell.textContent.toUpperCase().startsWith('CLOSED')) return;
+
+        const deltaCell = mainRow.querySelector('.net-delta-cell');
+        if (deltaCell) {
+            deltaCell.textContent = num(data.live_net_delta ?? data.net_delta).toFixed(2);
+        }
+
+        const pnlCell = mainRow.querySelector('.pnl-cell');
+        if (pnlCell) {
+            const pnl = num(data.live_pnl ?? data.total_pnl);
+            pnlCell.textContent = `₹${pnl.toFixed(2)}`;
+            pnlCell.className = `pnl-cell ${pnl >= 0 ? 'positive' : 'negative'}`;
+        }
+
+        if (data.position_ltps) {
+            for (const [token, ltp] of Object.entries(data.position_ltps)) {
+                updatePrice(parseInt(token, 10), ltp);
+            }
+        }
+    }
+
+    // ── Portfolio table ───────────────────────────────────────────────────────
+    const portfolioRow = document.querySelector(
+        `#portfolio-positions-display tr[data-trade-uid="${tradeUid}"]`
+    );
+
+    if (portfolioRow) {
+        const statusCell = portfolioRow.querySelector('td:nth-child(4)');
+        if (statusCell && statusCell.textContent.toUpperCase().startsWith('CLOSED')) return;
+
+        const deltaCell = portfolioRow.querySelector('.net-delta-cell');
+        if (deltaCell) {
+            deltaCell.textContent = num(data.live_net_delta ?? data.net_delta).toFixed(2);
+        }
+
+        const strikeCell = portfolioRow.querySelector('.strike-cell');
+        if (strikeCell && data.strike !== null && data.strike !== undefined) {
+            strikeCell.textContent = data.strike;
+        }
+
+        if (data.status && statusCell) {
+            const prevStatus = statusCell.textContent;
+            statusCell.textContent = data.status;
+            statusCell.className = _statusClass(data.status);
+
+            if (data.status !== prevStatus) {
+                const actionsCell = portfolioRow.querySelector('.actions-cell');
+                if (actionsCell) {
+                    actionsCell.innerHTML = _buildActionsHtml(
+                        tradeUid,
+                        data.status,
+                        num(data.live_net_delta ?? data.net_delta)
+                    );
+                }
+            }
+        }
+
+        const unrealizedPnlCell = portfolioRow.querySelector('.unrealized-pnl-cell');
+        if (unrealizedPnlCell) {
+            const v = num(data.unrealized_pnl);
+            unrealizedPnlCell.textContent = `₹${v.toFixed(2)}`;
+            unrealizedPnlCell.className = `unrealized-pnl-cell ${v >= 0 ? 'positive' : 'negative'}`;
+        }
+
+        const realizedPnlCell = portfolioRow.querySelector('.realized-pnl-cell');
+        if (realizedPnlCell) {
+            const v = num(data.realized_pnl);
+            realizedPnlCell.textContent = `₹${v.toFixed(2)}`;
+            realizedPnlCell.className = `realized-pnl-cell ${v >= 0 ? 'positive' : 'negative'}`;
+        }
+
+        const ptsOutCell = portfolioRow.querySelector('.pts-out-cell');
+        if (ptsOutCell) {
+            const ptsOut = num(data.pts_out);
+            const pointsAllowed = data.points_allowed ?? null;
+            ptsOutCell.textContent = ptsOut.toFixed(2);
+
+            let cls = 'positive';
+            if (pointsAllowed !== null && Number(pointsAllowed) > 0) {
+                const ratio = ptsOut / Number(pointsAllowed);
+                cls = ratio >= 1.0 ? 'negative' : ratio >= 0.5 ? 'yellow' : 'positive';
+            }
+            ptsOutCell.className = `pts-out-cell ${cls}`;
+        }
+
+        const ptsAllowedCell = portfolioRow.querySelector('.pts-allowed-cell');
+        if (ptsAllowedCell) {
+            const pa = data.points_allowed;
+            ptsAllowedCell.textContent =
+                (pa !== null && pa !== undefined) ? num(pa).toFixed(2) : '∞';
+        }
+
+        const pnlPerLotCell = portfolioRow.querySelector('.pnl-per-lot-cell');
+        if (pnlPerLotCell) {
+            const v = data.pnl_per_straddle ?? data.pnl_per_lot ?? null;
+            if (v !== null && v !== undefined) {
+                const pnlPerLot = num(v);
+                pnlPerLotCell.textContent = `₹${pnlPerLot.toFixed(2)}`;
+                pnlPerLotCell.className = `pnl-per-lot-cell ${pnlPerLot >= 0 ? 'positive' : 'negative'}`;
+            }
+        }
+
+        if (data.position_ltps) {
+            for (const [token, ltp] of Object.entries(data.position_ltps)) {
+                updatePrice(parseInt(token, 10), ltp);
+            }
+        }
+    }
+
+    // ── Spot / synthetic spot header ──────────────────────────────────────────
+    if (data.spot_price !== null && data.spot_price !== undefined) {
+        const el = document.getElementById('chain-spot-value');
+        if (el) el.textContent = `₹${num(data.spot_price).toFixed(2)}`;
+    }
+
+    if (data.synthetic_spot !== null && data.synthetic_spot !== undefined) {
+        const el = document.getElementById('chain-synfut-value');
+        if (el) el.textContent = `₹${num(data.synthetic_spot).toFixed(2)}`;
+    }
+
+    // ── Live score monitor via websocket ──────────────────────────────────────
+    const score = data.score || {};
+    setTextIfPresent('score-live-iv', score.live_iv, v => num(v).toFixed(6));
+    setTextIfPresent('score-adj-iv', score.adj_iv, v => num(v).toFixed(6));
+    setTextIfPresent('score-live-straddle', score.live_straddle, v => num(v).toFixed(2));
+    setTextIfPresent('score-adj-idv', score.adj_idv, v => num(v).toFixed(6));
+    setTextIfPresent('score-prev-straddle', score.prev_day_straddle, v => num(v).toFixed(2));
+    setTextIfPresent('score-prev-day-adj-iv', score.prev_day_adj_iv, v => num(v).toFixed(6));
+    setTextIfPresent('score-iv-idv-ratio', score.iv_idv_ratio, v => num(v).toFixed(4));
+    setTextIfPresent('score-straddle-ratio', score.straddle_ratio, v => num(v).toFixed(4));
+    setTextIfPresent('score-og-gap-pct', score.og_gap_pct, v => `${(v * 100).toFixed(2)}%`);
+    setTextIfPresent('score-norm-og-gap', score.norm_og_gap, v => num(v).toFixed(6));
+    setTextIfPresent('score-adj-iv-chg', data.adj_iv_chg, v => num(v).toFixed(6));
+
+    // Buckets
+    const lut_payload = score.lut_payload || {};
+    setTextIfPresent('score-build-iv-bucket', lut_payload.Build_IV);
+    setTextIfPresent('score-dte-bucket', lut_payload.DTE);
+    setTextIfPresent('score-iv-ratio-bucket', lut_payload.IV_Ratio);
+    setTextIfPresent('score-straddle-ratio-bucket', lut_payload.Straddle_Ratio);
+    setTextIfPresent('score-adj-iv-chg-bucket', lut_payload.Adj_IV_Chg);
+    setTextIfPresent('score-norm-og-gap-bucket', lut_payload.Norm_OG_Gap);
+
+    // Raw values for gap calc
+    setTextIfPresent('score-future-price-ref', score.future_price_ref, v => num(v).toFixed(2));
+    setTextIfPresent('score-synthetic-price-ref', score.synthetic_price_ref, v => num(v).toFixed(2));
+    setTextIfPresent('score-price-ref-source', score.price_ref_source);
+
+    // Status Banner
+    const banner = document.getElementById('score-status-banner');
+    if (banner) {
+        const bannerInfo = buildScoreBannerMessage(score);
+        if (bannerInfo) {
+            updateScoreBanner(bannerInfo.message, bannerInfo.type);
+        }
+    }
+}
+
+// ── handleStraddleFullUpdate ──────────────────────────────────────────────────
+
+function handleStraddleFullUpdate(data) {
+    fetchStraddles(false);
+    const isPortfolio = document.getElementById('portfolio-view')
+        ?.classList.contains('active');
+    if (isPortfolio) fetchStraddles(true);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ORDER ACTIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+function _calculateLotsPerCallFromQty() {
+    const lotSize = window._chainATMTokens?.lot_size;
+    const qtyPerCallVal = document.getElementById('manual_lots_per_call').value;
+
+    if (!qtyPerCallVal) return 1; // Default to 1 lot if empty
+
+    const qtyPerCall = parseInt(qtyPerCallVal);
+    if (isNaN(qtyPerCall) || qtyPerCall <= 0) return 1;
+
+    if (lotSize && lotSize > 0) {
+        // Convert quantity per call to lots per call, rounding up.
+        const lots = Math.ceil(qtyPerCall / lotSize);
+        return lots > 0 ? lots : 1; // Ensure at least 1 lot
+    }
+
+    // Fallback: if no lot size is available, assume the user entered lots directly.
+    // This maintains behavior if the option chain hasn't been fetched.
+    return qtyPerCall;
+}
+function updateLiveScoreMonitorFromChain(chainData) {
+    if (!chainData) return;
+
+    const num = (v, fallback = 0) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+    };
+
+    const setField = (id, value, formatter = v => String(v)) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+
+        const out = (value === null || value === undefined || value === '')
+            ? '--'
+            : formatter(value);
+
+        if ('value' in el) el.value = out;
+        else el.textContent = out;
+    };
+
+    const atm = Number(chainData.atm ?? 0);
+    const row = Array.isArray(chainData.chain)
+        ? chainData.chain.find(r => Number(r.strike) === atm)
+        : null;
+
+    if (!row) return;
+
+    const ceIv = num(row.ce_iv);
+    const peIv = num(row.pe_iv);
+    const liveIv = (ceIv > 0 || peIv > 0) ? ((ceIv + peIv) / 2.0) : 0.0;
+    const liveIvDecimal = liveIv > 0 ? liveIv / 100.0 : 0.0;
+
+    const ceLtp = num(row.ce_ltp);
+    const peLtp = num(row.pe_ltp);
+    const liveStraddle = ceLtp + peLtp;
+
+    setField('score-live-iv', liveIv, v => num(v).toFixed(6));
+    setField('score-live-iv-decimal', liveIvDecimal, v => num(v).toFixed(6));
+    setField('score-live-straddle', liveStraddle, v => num(v).toFixed(2));
+
+    if (typeof previewBuildScore === 'function') {
+        previewBuildScore();
+    } else if (typeof calculateBuildScorePreview === 'function') {
+        calculateBuildScorePreview();
+    }
+}
+
+function _calculateLotsFromQuantity(approxQuantity) {
+    const lotSize = window._chainATMTokens?.lot_size;
+    if (!lotSize || lotSize <= 0) {
+        showNotification('Lot size not available. Please fetch option chain first.', 'error');
+        return null;
+    }
+    if (isNaN(approxQuantity) || approxQuantity <= 0) {
+        showNotification('Please enter a valid approximate quantity.', 'error');
+        return null;
+    }
+
+    // Round to nearest multiple of lot size and then calculate lots
+    const roundedQuantity = Math.round(approxQuantity / lotSize) * lotSize;
+    const calculatedLots = roundedQuantity / lotSize;
+
+    if (calculatedLots <= 0) {
+        showNotification('Calculated lots are zero. Please enter a larger quantity.', 'error');
+        return null;
+    }
+    return calculatedLots;
+}
+
+async function sellStraddle() {
+    const symbol      = document.getElementById('symbol').value;
+    const approxQuantity = parseInt(document.getElementById('lots').value);
+    const lotsPerCall = _calculateLotsPerCallFromQty();
+    
+    const lots = _calculateLotsFromQuantity(approxQuantity);
+    if (lots === null) return;
+
+    // NO chain guard — backend computes ATM strike server-side
+    if (!confirm(`Place ${symbol} ATM Straddle (${lots} lots)?\n(Approx. Qty: ${approxQuantity} -> Rounded Qty: ${lots * (window._chainATMTokens?.lot_size || 0)})`)) return;
+
+    try {
+        showNotification(`Placing ${lots} lot ATM straddle for ${symbol}...`, 'info');
+        const response = await fetch('/api/straddle/sell', {

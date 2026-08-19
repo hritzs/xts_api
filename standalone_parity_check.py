@@ -1,192 +1,236 @@
-"""
-STANDALONE PARITY CHECKER
--------------------------
-Safe to run while main app is stopped.
-1. Connects directly to XTS (Broker) to fetch the full Order Book.
-2. Connects directly to your Local DB to fetch today's Straddles.
-3. Matches them by Trade UID.
-4. Calculates the REAL net position from the Broker's filled orders.
-5. Compares it with the DB's stored quantity.
-"""
-
 import asyncio
 import sys
 import re
-import os
 from collections import defaultdict
 
-# --- Imports (Mocking config/cred if needed or loading from file) ---
 try:
     import cred
-    import config
     from Connect import XTSConnect
     from database.db_manager import Database
 except ImportError as e:
-    print(f"❌ CRITICAL ERROR: Could not import project modules.")
-    print(f"   Make sure you run this script from the project root directory.")
+    print("❌ CRITICAL ERROR: Could not import project modules.")
+    print("   Make sure you run this script from the project root directory.")
     print(f"   Error details: {e}")
     sys.exit(1)
 
-# Regex to find Trade UID in OrderUniqueIdentifier
-# Looks for patterns like 'ny240724100000a' inside strings like 'SQF_ny240724100000a_CHUNK1'
-# Made suffix optional to catch UIDs truncated by XTS 20-char limit
-UID_PATTERN = re.compile(r'((?:ny|sx|bn|fn|mc)\d{12}[a-z]?)(?:_.*)?')
+UID_PATTERN = re.compile(r'([a-zA-Z]{2}\d{12}[a-z]?)')
+
+
+def _safe_int(v, default=0):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_str(v):
+    return str(v).strip() if v is not None else ""
+
+
+def _extract_uid(ouid: str):
+    if not ouid:
+        return None
+    m = UID_PATTERN.search(ouid)
+    return m.group(1) if m else None
+
+
+def _normalize_status(status: str):
+    s = _safe_str(status).upper()
+    if s in {"FILLED", "COMPLETE", "TRADED", "EXECUTED"}:
+        return "FILLED"
+    if s in {"CANCELLED", "CANCELED"}:
+        return "CANCELLED"
+    if s in {"REJECTED"}:
+        return "REJECTED"
+    if s in {"PARTIALLYFILLED", "PARTIAL"}:
+        return "PARTIAL"
+    return s or "UNKNOWN"
+
 
 async def main():
-    print("\n" + "="*80)
-    print("🕵️  STANDALONE PARITY CHECKER (READ-ONLY)")
-    print("="*80)
+    print("\n" + "=" * 120)
+    print("🕵️  STANDALONE PARITY CHECKER (QTY ONLY, ORDER-LEVEL)")
+    print("=" * 120)
 
-    # 1. Initialize Database
     print("🔹 Connecting to Database...")
     try:
         db = Database()
-        # Fetch all straddles for today (Active, Closed, etc.)
         straddles = await asyncio.to_thread(db.get_todays_straddles)
         print(f"   ✅ DB Connected. Found {len(straddles)} trades in local DB for today.")
     except Exception as e:
         print(f"   ❌ DB Connection Failed: {e}")
         return
 
-    # 2. Connect to XTS (Broker)
+    straddles_by_uid = {}
+    for s in straddles:
+        uid = s.get("trade_uid") or s.get("straddle_id")
+        if uid:
+            straddles_by_uid[uid] = s
+
     print("🔹 Connecting to Broker (XTS Interactive)...")
     try:
         xt = XTSConnect(cred.API_KEY_I, cred.API_SECRET_I, "WEBAPI")
         login_resp = xt.interactive_login()
-        if login_resp.get('type') != 'success':
+
+        if login_resp.get("type") != "success":
             print(f"   ❌ Login Failed: {login_resp.get('description')}")
             return
-        
-        # Get Client ID for order book fetch
-        user_id = login_resp['result'].get('userID')
-        # FIX: Use clientID from creds if available (Pro/Dealer setup), else fallback to login userID
-        client_id = getattr(cred, 'clientID', None) or user_id
-        
+
+        user_id = login_resp["result"].get("userID")
+        client_id = getattr(cred, "clientID", None) or user_id
+
         print(f"   ✅ Login Successful. User: {user_id}")
         if client_id != user_id:
             print(f"   ℹ️  Using Configured Client ID: {client_id}")
 
-        # Fetch Order Book
-        print("🔹 Fetching Full Broker Order Book...")
-        # FIX: Force isInvestorClient to False to ensure clientID parameter is respected
+        print("🔹 Fetching Broker Order Book...")
         xt.isInvestorClient = False
         order_book_resp = xt.get_order_book(clientID=client_id)
-        if order_book_resp.get('type') != 'success':
+
+        if order_book_resp.get("type") != "success":
             print(f"   ❌ Failed to fetch order book: {order_book_resp}")
             return
-        
-        broker_orders = order_book_resp.get('result', [])
+
+        broker_orders = order_book_resp.get("result", [])
         print(f"   ✅ Fetched {len(broker_orders)} orders from broker.")
-    
+
     except Exception as e:
         print(f"   ❌ Broker Connection/Fetch Failed: {e}")
         return
 
-    # 3. Process Broker Data
-    print("🔹 Analyzing Broker Data...")
-    
-    # Create reverse map for truncated UIDs
-    truncated_to_full_uid = {s.get('trade_uid', '')[:-1]: s.get('trade_uid', '') for s in straddles if s.get('trade_uid')}
-
-    # Map: trade_uid -> list of filled orders
+    print("🔹 Grouping broker orders by trade UID...")
     broker_trade_map = defaultdict(list)
-    
-    for order in broker_orders:
-        # Only care about FILLS
-        status = str(order.get('OrderStatus', '')).upper()
-        if status not in ['FILLED', 'COMPLETE', 'TRADED', 'EXECUTED']:
-            continue
-            
-        # Extract Trade UID
-        ouid = order.get('OrderUniqueIdentifier', '')
-        match = UID_PATTERN.search(ouid)
-        if match:
-            extracted_uid = match.group(1)
-            trade_uid = truncated_to_full_uid.get(extracted_uid, extracted_uid)
-            broker_trade_map[trade_uid].append(order)
-        # Note: Orders without a UID pattern in OrderUniqueIdentifier cannot be mapped 
-        # back to a specific algo trade easily and are skipped here.
 
-    # 4. Compare and Report
-    print("\n" + "="*100)
-    print(f"{'TRADE UID':<18} | {'STATUS':<10} | {'TOKEN':<8} | {'DB QTY':<8} | {'REAL QTY':<8} | {'DIFF':<5} | {'RESULT'}")
-    print("="*100)
+    for order in broker_orders:
+        ouid = _safe_str(order.get("OrderUniqueIdentifier"))
+        extracted_uid = _extract_uid(ouid)
+        if not extracted_uid:
+            continue
+
+        full_trade_uid = next((uid for uid in straddles_by_uid if uid == extracted_uid), None)
+        if not full_trade_uid:
+            full_trade_uid = next((uid for uid in straddles_by_uid if uid.startswith(extracted_uid)), None)
+
+        broker_trade_map[full_trade_uid or extracted_uid].append(order)
+
+    print(f"   ✅ Mapped broker orders to {len(broker_trade_map)} UID buckets.")
+
+    print("\n" + "=" * 120)
+    print(
+        f"{'TRADE UID':<18} | {'STATUS':<10} | {'LEG':<4} | {'TOKEN':<8} | {'LOT':<5} | "
+        f"{'DB QTY':<8} | {'BROKER QTY':<10} | {'DIFF':<7} | {'DIFF LOTS':<10} | {'RESULT'}"
+    )
+    print("=" * 120)
 
     mismatches_found = 0
 
-    # Combine UIDs from DB and Broker to catch ghost trades
-    all_uids = set(straddles_map.get('trade_uid') or straddles_map.get('straddle_id') for straddles_map in straddles)
+    all_uids = set(straddles_by_uid.keys())
     all_uids.update(broker_trade_map.keys())
 
     for uid in sorted(all_uids):
-        # Get DB Data
-        db_record = next((s for s in straddles if (s.get('trade_uid') == uid or s.get('straddle_id') == uid)), None)
-        
-        # Defaults if not in DB
+        db_record = straddles_by_uid.get(uid)
+
         db_status = "UNKNOWN"
         db_ce_qty = 0
         db_pe_qty = 0
         ce_token = 0
         pe_token = 0
-        
-        if db_record:
-            db_status = str(db_record.get('status', ''))[:10]
-            db_ce_qty = int(db_record.get('ce_quantity', 0))
-            db_pe_qty = int(db_record.get('pe_quantity', 0))
-            ce_token = int(db_record.get('ce_token', 0))
-            pe_token = int(db_record.get('pe_token', 0))
+        lot_size = 0
 
-        # Calculate Real Net Position from Broker Orders
+        if db_record:
+            db_status = _safe_str(db_record.get("status"))[:10]
+            db_ce_qty = _safe_int(db_record.get("ce_quantity"))
+            db_pe_qty = _safe_int(db_record.get("pe_quantity"))
+            ce_token = _safe_int(db_record.get("ce_token"))
+            pe_token = _safe_int(db_record.get("pe_token"))
+            lot_size = _safe_int(db_record.get("lot_size"))
+
         real_ce_net = 0
         real_pe_net = 0
-        
+        ce_ids = []
+        pe_ids = []
+
         orders = broker_trade_map.get(uid, [])
+
+        # IMPORTANT: use each broker order once, not every trade-book fill row
+        seen_app_ids = set()
+
         for order in orders:
-            token = int(order.get('ExchangeInstrumentID', 0))
-            qty = int(order.get('CumulativeQuantity') or order.get('FilledQty') or 0)
-            side = str(order.get('OrderSide', '')).upper()
-            
-            # Net Position Logic: SELL is + (Open), BUY is - (Close)
-            # Assuming Short Straddle Logic
-            signed_qty = qty if side == 'SELL' else -qty
-            
+            app_id = _safe_str(order.get("AppOrderID"))
+            if not app_id or app_id in seen_app_ids:
+                continue
+            seen_app_ids.add(app_id)
+
+            token = _safe_int(order.get("ExchangeInstrumentID"))
+            side = _safe_str(order.get("OrderSide")).upper()
+            status = _normalize_status(order.get("OrderStatus"))
+
+            if side not in {"BUY", "SELL"}:
+                continue
+
+            qty = _safe_int(
+                order.get("CumulativeQuantity")
+                or order.get("LeavesQuantity")
+                and (_safe_int(order.get("OrderQuantity")) - _safe_int(order.get("LeavesQuantity")))
+                or order.get("OrderQuantity")
+            )
+
+            if qty <= 0:
+                continue
+
+            # For current position parity, ignore fully unfilled/non-filled states
+            if status not in {"FILLED", "PARTIAL"}:
+                continue
+
+            signed_qty = qty if side == "SELL" else -qty
+
             if token == ce_token and ce_token != 0:
                 real_ce_net += signed_qty
+                ce_ids.append(app_id)
             elif token == pe_token and pe_token != 0:
                 real_pe_net += signed_qty
-            else:
-                # If token doesn't match current DB tokens (e.g. previous rolls), 
-                # we can't easily map it to current CE/PE columns, but strict parity
-                # checks usually care about the currently active legs.
-                pass
+                pe_ids.append(app_id)
 
-        # Calculate Diffs
         diff_ce = db_ce_qty - real_ce_net
         diff_pe = db_pe_qty - real_pe_net
-        
-        # Print Row for CE
+
+        diff_ce_lots = (diff_ce / lot_size) if lot_size > 0 else 0
+        diff_pe_lots = (diff_pe / lot_size) if lot_size > 0 else 0
+
         if ce_token > 0 or real_ce_net != 0:
             res_ce = "✅ OK" if diff_ce == 0 else "❌ FAIL"
-            if diff_ce != 0: mismatches_found += 1
-            print(f"{uid:<18} | {db_status:<10} | CE {ce_token:<5} | {db_ce_qty:<8} | {real_ce_net:<8} | {diff_ce:<5} | {res_ce}")
+            if diff_ce != 0:
+                mismatches_found += 1
+            print(
+                f"{uid:<18} | {db_status:<10} | {'CE':<4} | {ce_token:<8} | {lot_size:<5} | "
+                f"{db_ce_qty:<8} | {real_ce_net:<10} | {diff_ce:<+7} | {diff_ce_lots:<+10.2f} | {res_ce}"
+            )
+            if ce_ids:
+                print(f"{'':<18} | {'':<10} | {'':<4} | Included CE AppOrderIDs: {', '.join(ce_ids)}")
 
-        # Print Row for PE
         if pe_token > 0 or real_pe_net != 0:
             res_pe = "✅ OK" if diff_pe == 0 else "❌ FAIL"
-            if diff_pe != 0: mismatches_found += 1
-            print(f"{'':<18} | {'':<10} | PE {pe_token:<5} | {db_pe_qty:<8} | {real_pe_net:<8} | {diff_pe:<5} | {res_pe}")
-            
-        if (ce_token > 0 or pe_token > 0):
-            print("-" * 100)
+            if diff_pe != 0:
+                mismatches_found += 1
+            print(
+                f"{'':<18} | {'':<10} | {'PE':<4} | {pe_token:<8} | {lot_size:<5} | "
+                f"{db_pe_qty:<8} | {real_pe_net:<10} | {diff_pe:<+7} | {diff_pe_lots:<+10.2f} | {res_pe}"
+            )
+            if pe_ids:
+                print(f"{'':<18} | {'':<10} | {'':<4} | Included PE AppOrderIDs: {', '.join(pe_ids)}")
 
-    print("\n" + "="*100)
+        if ce_token > 0 or pe_token > 0:
+            print("-" * 120)
+
+    print("\n" + "=" * 120)
     if mismatches_found == 0:
-        print("✅ INTEGRITY CHECK PASSED: Database matches Broker Order Book perfectly.")
+        print("✅ INTEGRITY CHECK PASSED: DB quantities match broker order-level net quantities.")
     else:
         print(f"❌ INTEGRITY CHECK FAILED: Found {mismatches_found} discrepancies.")
-        print("   Positive Diff (+): DB has phantom positions (DB says open, Broker says closed).")
-        print("   Negative Diff (-): DB is missing positions (Broker says open, DB says closed).")
-    print("="*100 + "\n")
+        print("   Positive Diff (+): DB has more than broker.")
+        print("   Negative Diff (-): Broker has more than DB.")
+    print("=" * 120 + "\n")
+
 
 if __name__ == "__main__":
     try:

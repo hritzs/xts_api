@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Terminal</title>
+
+    <link rel="stylesheet" href="/static/style.css">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        .panel table {
+            font-size: 14px;
+        }
+
+        .panel th,
+        .panel td {
+            padding: 12px 15px;
+        }
+
+        .details-card.large-card .details-table {
+            font-size: 15px !important;
+        }
+
+        .details-card.large-card .details-table th,
+        .details-card.large-card .details-table td {
+            padding: 12px 15px !important;
+        }
+
+        .portfolio-grid {
+            display: block;
+        }
+
+        .portfolio-grid .panel {
+            margin-bottom: 20px;
+        }
+
+        .score-monitor-box {
+            margin-top: 20px;
+            padding: 16px;
+            border: 1px solid #444;
+            border-radius: 8px;
+            background: #111;
+        }
+
+        .score-monitor-box h3 {
+            margin: 0 0 12px 0;
+            color: #ddd;
+        }
+
+        .score-status-banner {
+            padding: 10px 12px;
+            border-radius: 6px;
+            background: #222;
+            color: #ddd;
+            border: 1px solid #444;
+            margin-top: 12px;
+            font-family: 'Roboto Mono', monospace;
+        }
+
+        .manual-input-box {
+            margin-top: 20px;
+            padding: 16px;
+            border: 1px solid #444;
+            border-radius: 8px;
+            background: #151515;
+        }
+
+        .manual-input-box h3 {
+            margin: 0 0 10px 0;
+            color: #ddd;
+        }
+
+        .manual-input-note {
+            margin: 0 0 14px 0;
+            font-size: 13px;
+            color: #aaa;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1>Trading Terminal</h1>
+                <div class="status-indicators">
+                    <div id="ws-status" class="status-indicator disconnected">
+                        <span class="dot"></span>
+                        <span class="text">OFFLINE</span>
+                    </div>
+                    <div id="socket-status" class="status-indicator disconnected">
+                        <span class="dot"></span>
+                        <span class="text">SOCKET</span>
+                    </div>
+                </div>
+            </div>
+            <div class="header-right">
+                <div id="clock" class="clock">00:00:00</div>
+            </div>
+        </header>
+
+        <!-- Summary Bar -->
+        <div class="summary-bar">
+            <div class="summary-item">
+                <label>Total Live PnL</label>
+                <div id="total-pnl-value" class="summary-value neutral">₹0.00</div>
+            </div>
+            <div class="summary-item">
+                <label>Active Trades</label>
+                <div id="active-trades-count" class="summary-value">0</div>
+            </div>
+            <div class="summary-item">
+                <label>Total Premium</label>
+                <div id="total-premium-received" class="summary-value">₹0.00</div>
+            </div>
+            <div class="summary-item">
+                <label>Net Delta</label>
+                <div id="total-net-delta" class="summary-value neutral">0.00</div>
+            </div>
+        </div>
+
+        <!-- Main Tabs -->
+        <div class="main-tabs">
+            <button class="tab-btn active" onclick="switchMainTab('terminal')">Terminal</button>
+            <button class="tab-btn" onclick="switchMainTab('portfolio')">Portfolio</button>
+            <button class="tab-btn" onclick="switchMainTab('automation')">Automation</button>
+        </div>
+
+        <!-- Terminal View -->
+        <div id="terminal-view" class="main-tab-content active">
+            <div class="main-grid">
+
+                <!-- Left: Order Entry + Positions -->
+                <div class="panel-container">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Order Entry</h2>
+                        </div>
+                        <div class="panel-content">
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="symbol">Symbol</label>
+                                    <select id="symbol" onchange="loadOptionChain()">
+                                        <option value="NIFTY">NIFTY</option>
+                                        <option value="BANKNIFTY">BANKNIFTY</option>
+                                        <option value="SENSEX">SENSEX</option>
+                                        <option value="FINNIFTY">FINNIFTY</option>
+                                        <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="lots">Approx. Qty</label>
+                                    <input type="number" id="lots" value="65" min="1" oninput="debouncedRoundQuantity('lots')">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="manual_lots_per_call" title="Quantity per broker call">Qty Per Call</label>
+                                    <input type="number" id="manual_lots_per_call" value="65" min="1" oninput="debouncedRoundQuantity('manual_lots_per_call')">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>ATM Strike</label>
+                                    <input type="text" id="atm-strike" readonly value="--">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Straddle Premium</label>
+                                    <input type="text" id="straddle-premium" readonly value="--">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="total-premium">Total Premium</label>
+                                <input type="text" id="total-premium" readonly value="--">
+                            </div>
+
+                            <div class="form-grid">
+
+                                <div class="form-group">
+                                    <label>Entry At Straddle (?)</label>
+                                    <input
+                                        type="number"
+                                        id="entry-at-straddle"
+                                        step="0.05"
+                                        placeholder="e.g. 275.50">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Exit At Straddle (?)</label>
+                                    <input
+                                        type="number"
+                                        id="exit-at-straddle"
+                                        step="0.05"
+                                        placeholder="e.g. 245.00">
+                                </div>
+
+                            </div>
+
+                            <div class="button-group">
+                                <button class="btn btn-primary" onclick="sellStraddle()">🚀 Sell ATM Straddle</button>
+                                <button class="btn btn-secondary" onclick="loadOptionChain()">🔄 Refresh Chain</button>
+                            </div>
+
+                            <hr style="border-color:#444;margin:20px 0;">
+
+                            <h3 style="margin-top:0;margin-bottom:15px;text-align:center;color:#ccc;">Custom Strangle / Straddle</h3>
+
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="custom-ce-strike">Custom CE Strike</label>
+                                    <input type="number" id="custom-ce-strike" placeholder="e.g., 22500" step="50">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="custom-pe-strike">Custom PE Strike</label>
+                                    <input type="number" id="custom-pe-strike" placeholder="e.g., 22400" step="50">
+                                </div>
+                            </div>
+
+                            <div class="form-group checkbox-group" style="justify-content:center;margin-top:10px;margin-bottom:15px;">
+                                <input type="checkbox" id="custom-delta-neutral" checked>
+                                <label for="custom-delta-neutral">Delta Neutral</label>
+                            </div>
+
+                            <div class="button-group">
+                                <button class="btn btn-success" onclick="sellCustomStraddle()">🎯 Sell Custom</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Active Positions</h2>
+                            <button class="btn-icon" onclick="fetchStraddles()">🔄</button>
+                        </div>
+                        <div class="panel-content scrollable" id="straddles-display">
+                            <div class="placeholder">No active positions</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Option Chain + Logs -->
+                <div class="panel-container">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Option Chain</h2>
+                            <div class="chain-header-info">
+                                <span id="chain-header-spot">Spot: <span id="chain-spot-value">--</span></span>
+                                <span id="chain-header-synthetic-spot" style="margin-left:15px;">Syn.Fut: <span id="chain-synfut-value">--</span></span>
+                                <span id="chain-header-atm" style="margin-left:15px;">ATM: <span id="chain-atm-value">--</span></span>
+                                <span id="chain-header-expiry" style="margin-left:15px;">Expiry: <span id="chain-expiry-value">--</span></span>
+                                <span id="chain-header-var" style="margin-left:15px;">VaR(95%): <span id="chain-var-value">--</span></span>
+                            </div>
+                        </div>
+                        <div class="panel-content scrollable" id="option-chain-container">
+                            <div class="placeholder">Loading Option Chain...</div>
+                        </div>
+                    </div>
+
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Event Log</h2>
+                        </div>
+                        <div class="panel-content scrollable" id="log-panel-content">
+                            <div class="log-entry log-info">
+                                <span class="log-timestamp"></span>
+                                <span class="log-level">INFO</span>
+                                <span class="log-message">Terminal initialized. Waiting for connection...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Portfolio View -->
+        <div id="portfolio-view" class="main-tab-content">
+            <div class="portfolio-grid">
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Trade Details</h2>
+                        <button class="btn-icon" onclick="fetchStraddles(true)">🔄</button>
+                    </div>
+                    <div class="panel-content scrollable" id="portfolio-positions-display">
+                        <div class="placeholder">Loading positions...</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Order History (Today)</h2>
+                        <button class="btn-icon" onclick="fetchOrders()">🔄</button>
+                    </div>
+                    <div class="panel-content scrollable" id="portfolio-orders-display">
+                        <div class="placeholder">Loading orders...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Automation View -->
+        <div id="automation-view" class="main-tab-content">
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>🤖 Configuration-Based Build</h2>
+                </div>
+
+                <div class="panel-content" id="config-build-form">
+                    <div class="form-grid" style="grid-template-columns:repeat(4,1fr);">
+                        <div class="form-group">
+                            <label for="config-symbol">Symbol</label>
+                            <select id="config-symbol" name="config-symbol">
+                                <option value="NIFTY">NIFTY</option>
+                                <option value="BANKNIFTY">BANKNIFTY</option>
+                                <option value="SENSEX">SENSEX</option>
+                                <option value="FINNIFTY">FINNIFTY</option>
+                                <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-size">Approx. Qty</label>
+                            <input type="number" id="config-size" name="config-size" value="25025" min="1" oninput="debouncedRoundQuantity('config-size')">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-ce-strike">CE Strike (Optional)</label>
+                            <input type="number" id="config-ce-strike" name="config-ce-strike" placeholder="e.g., 22500">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-pe-strike">PE Strike (Optional)</label>
+                            <input type="number" id="config-pe-strike" name="config-pe-strike" placeholder="e.g., 22400">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="auto_lots_per_call">Qty Per Call</label>
+                            <input type="number" id="auto_lots_per_call" name="auto_lots_per_call" value="65" min="1" oninput="debouncedRoundQuantity('auto_lots_per_call')">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-entry-time">Entry Time</label>
+                            <input type="time" id="config-entry-time" name="config-entry-time" value="09:18:00" step="1" max="13:15:00">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-exit-time">Exit Time</label>
+                            <input type="time" id="config-exit-time" name="config-exit-time" value="15:27:00" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label>Rule</label>
+                            <input type="text" id="config-score-rule" value="LUT Decision is YES" readonly>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-sl-bps">SL (bps)</label>
+                            <input type="number" id="config-sl-bps" name="config-sl-bps" value="14">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-straddle-stop-pct" title="Stop building if straddle price drops by this % of reference.">Straddle Stop %</label>
+                            <input type="number" id="config-straddle-stop-pct" name="config-straddle-stop-pct" value="1.0" step="0.1">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="config-tp-bps">TP (bps)</label>
+                            <input type="number" id="config-tp-bps" name="config-tp-bps" placeholder="e.g. 20">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-exit-at-straddle">Exit At Straddle</label>
+                            <input
+                                type="number"
+                                id="config-exit-at-straddle"
+                                name="config-exit-at-straddle"
+                                step="0.05"
+                                placeholder="e.g. 125.50">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="config-hedge-div">Hedge Divisor</label>
+                            <input type="number" id="config-hedge-div" name="config-hedge-div" value="57">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-straddle-div">Hedge Straddle Divisor</label>
+                            <input type="number" id="config-straddle-div" name="config-straddle-div" value="4">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-roll-straddle-div">Roll Straddle Divisor</label>
+                            <input type="number" id="config-roll-straddle-div" name="config-roll-straddle-div" value="0.001" step="0.1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-hedge-frac">Hedge Fraction</label>
+                            <input type="number" step="0.1" id="config-hedge-frac" name="config-hedge-frac" value="1.0">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-sl-interval">SL Interval (s)</label>
+                            <input type="number" step="0.1" id="config-sl-interval" name="config-sl-interval" value="60" min="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-hedge-interval">Hedge Interval (s)</label>
+                            <input type="number" step="0.1" id="config-hedge-interval" name="config-hedge-interval" value="60" min="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-roll-interval">Roll Interval (s)</label>
+                            <input type="number" step="0.1" id="config-roll-interval" name="config-roll-interval" value="60" min="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-hedge-start-time">Hedge Start</label>
+                            <input type="time" id="config-hedge-start-time" name="config-hedge-start-time" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-sl-start-time">SL Start</label>
+                            <input type="time" id="config-sl-start-time" name="config-sl-start-time" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-roll-start-time">Roll Start</label>
+                            <input type="time" id="config-roll-start-time" name="config-roll-start-time" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-buy-buffer">Buy Buffer (₹)</label>
+                            <input type="number" id="config-buy-buffer" name="config-buy-buffer" value="2" min="0">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-sell-buffer">Sell Buffer (₹)</label>
+                            <input type="number" id="config-sell-buffer" name="config-sell-buffer" value="2" min="0">
+                        </div>
+                    </div>
+
+                    <!-- Manual Reference Inputs -->
+                    <div class="manual-input-box">
+                        <h3>Manual Reference Inputs</h3>
+                        <p class="manual-input-note">
+                            Use these only when auto-fetch fails. If auto data is missing, these values will be used for score preview and build.
+                        </p>
+
+                        <div class="form-grid" style="grid-template-columns:repeat(4,1fr); gap:12px;">
+                            <div class="form-group">
+                                <label for="config-manual-latest-idv">Manual Latest IDV</label>
+                                <input
+                                    type="number"
+                                    id="config-manual-latest-idv"
+                                    name="config-manual-latest-idv"
+                                    step="0.000001"
+                                    min="0"
+                                    placeholder="e.g. 0.142000"
+                                >
+                            </div>
+
+                            <div class="form-group">
+                                <label for="config-manual-historical-idv">Manual Historical IDV</label>
+                                <input
+                                    type="number"
+                                    id="config-manual-historical-idv"
+                                    name="config-manual-historical-idv"
+                                    step="0.000001"
+                                    min="0"
+                                    placeholder="e.g. 0.138000"
+                                >
+                            </div>
+
+                            <div class="form-group">
+                                <label for="config-manual-prev-day-straddle">Manual Prev Day Straddle</label>
+                                <input
+                                    type="number"
+                                    id="config-manual-prev-day-straddle"
+                                    name="config-manual-prev-day-straddle"
+                                    step="0.01"
+                                    min="0"
+                                    placeholder="e.g. 245.50"
+                                >
+                            </div>
+
+                            <div class="form-group">
+                                <label for="config-manual-spot-price">Manual Spot Price</label>
+                                <input
+                                    type="number"
+                                    id="config-manual-spot-price"
+                                    name="config-manual-spot-price"
+                                    step="0.01"
+                                    min="0"
+                                    placeholder="e.g. 24200.50"
+                                >
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="score-monitor-box">
+                        <h3>Live LUT Factors</h3>
+
+                        <div class="form-grid" style="grid-template-columns:repeat(3,1fr); gap:12px;">
+                            <div class="form-group">
+                                <label>Live IV</label>
+                                <input type="text" id="score-live-iv" readonly value="--">
+                            </div>
+                            <div class="form-group">
+                                <label>Live IV (Decimal)</label>
+                                <input type="text" id="score-live-iv-decimal" readonly value="--">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Adjusted IV (Build IV)</label>
+                                <input type="text" id="score-adj-iv" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Build IV Bucket</label>
+                                <input type="text" id="score-build-iv-bucket" readonly value="--" >
+                            </div>
+
+                            <div class="form-group">
+                                <label>Live Straddle</label>
+                                <input type="text" id="score-live-straddle" readonly value="--">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Adjusted IDV</label>
+                                <input type="text" id="score-adj-idv" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>DTE Bucket (Day)</label>
+                                <input type="text" id="score-dte-bucket" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Prev Day Adj IV</label>
+                                <input type="text" id="score-prev-day-adj-iv" readonly value="--" >
+                            </div>
+
+                            <div class="form-group">
+                                <label>Prev Day Straddle</label>
+                                <input type="text" id="score-prev-straddle" readonly value="--">
+                            </div>
+
+                            <div class="form-group">
+                                <label>IV / IDV Ratio (adj_iv/adj_idv)</label>
+                                <input type="text" id="score-iv-idv-ratio" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>IV Ratio Bucket</label>
+                                <input type="text" id="score-iv-ratio-bucket" readonly value="--" >
+                            </div>
+
+                            <div class="form-group">
+                                <label>Straddle Ratio (prev/live)</label>
+                                <input type="text" id="score-straddle-ratio" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Straddle Ratio Bucket</label>
+                                <input type="text" id="score-straddle-ratio-bucket" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Adj IV Chg</label>
+                                <input type="text" id="score-adj-iv-chg" readonly value="--" >
+                            </div>
+
+                            <div class="form-group">
+                                <label>Adj IV Chg Bucket</label>
+                                <input type="text" id="score-adj-iv-chg-bucket" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Prev Day Future Close</label>
+                                <input type="text" id="score-future-price-ref" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>9:18/Manual Ref. Spot</label>
+                                <input type="text" id="score-synthetic-price-ref" readonly value="--" >
+                            </div>
+                             <div class="form-group">
+                                <label>Ref. Spot Source</label>
+                                <input type="text" id="score-price-ref-source" readonly value="--" >
+                            </div>
+                             <div class="form-group">
+                                <label>OG Gap %</label>
+                                <input type="text" id="score-og-gap-pct" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Normalized OG Gap (Value)</label>
+                                <input type="text" id="score-norm-og-gap" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Norm OG Gap Bucket</label>
+                                <input type="text" id="score-norm-og-gap-bucket" readonly value="--" >
+                            </div>
+                        </div>
+
+                        <div id="score-status-banner" class="score-status-banner dual-lut-container">
+                            <table class="dual-lut-table">
+                                <thead><tr><th>Rule</th><th>Decision</th></tr></thead>
+                                <tbody>
+                                    <tr><td>LUT 1</td><td id="score-decision-1">--</td></tr>
+                                    <tr><td>LUT 2</td><td id="score-decision-2">--</td></tr>
+                                    <tr><td>Final Size</td><td id="score-size-multiplier">--</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="button-group">
+                        <button class="btn btn-primary" id="btn-config-build">▶️ Start Automated Build</button>
+                        <button class="btn" id="btn-save-config">💾 Save</button>
+                        <button class="btn" id="btn-load-config">📂 Load</button>
+                    </div>
+
+                    <div id="config-status-content" style="margin-top:20px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/ui.js?v=6" defer></script>
+    <script src="/static/straddles.js?v=6" defer></script>
+    <script src="/static/orders.js?v=6" defer></script>
+    <script src="/static/config_build.js?v=6" defer></script>
+    <script src="/static/option_chain.js?v=6" defer></script>
+    <script src="/static/websocket.js?v=6" defer></script>
+    <script src="/static/init.js?v=6" defer></script>
+</body>
+</html>

@@ -113,6 +113,7 @@ class ChainSHM:
             )
 
     def write(self, chain: dict):
+        logger.info("[CHAIN SHM WRITE] symbol=%s", getattr(self, "symbol", "?"))
         data = json.dumps(chain).encode('utf-8')
         length = len(data)
         if length + self._HEADER > CHAIN_SHM_SIZE:
@@ -124,6 +125,11 @@ class ChainSHM:
 
     def read(self) -> Optional[dict]:
         try:
+            if self.shm is None:
+                try:
+                    self.shm = shared_memory.SharedMemory(name=self.name, create=False, size=CHAIN_SHM_SIZE)
+                except Exception:
+                    return None
             length, _ = struct.unpack_from('<II', self.shm.buf, 0)
             if length == 0 or length > CHAIN_SHM_SIZE - self._HEADER:
                 return None

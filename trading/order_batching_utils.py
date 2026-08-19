@@ -90,7 +90,14 @@ def generate_chunked_orders(
             remainder_lots = lots_this_chunk %  min_lots_per_order
 
             for _ in range(n_full_orders):
-                uid = f"{trade_uid_prefix}_{ts_now + order_counter}"
+                counter_str = f"{order_counter:03d}"
+                if len(trade_uid_prefix) + len(counter_str) > 20:
+                    excess = len(trade_uid_prefix) + len(counter_str) - 20
+                    # Trim from the middle of the timestamp to preserve prefix and the 'a'/'b' suffix perfectly
+                    safe_prefix = trade_uid_prefix[:3] + trade_uid_prefix[3+excess:]
+                else:
+                    safe_prefix = trade_uid_prefix
+                uid = f"{safe_prefix}{counter_str}"
                 all_chunks[chunk_idx].append({
                     **base_params,
                     'quantity': min_lots_per_order * lot_size,
@@ -99,7 +106,13 @@ def generate_chunked_orders(
                 order_counter += 1
 
             if remainder_lots > 0:
-                uid = f"{trade_uid_prefix}_{ts_now + order_counter}"
+                counter_str = f"{order_counter:03d}"
+                if len(trade_uid_prefix) + len(counter_str) > 20:
+                    excess = len(trade_uid_prefix) + len(counter_str) - 20
+                    safe_prefix = trade_uid_prefix[:3] + trade_uid_prefix[3+excess:]
+                else:
+                    safe_prefix = trade_uid_prefix
+                uid = f"{safe_prefix}{counter_str}"
                 all_chunks[chunk_idx].append({
                     **base_params,
                     'quantity': remainder_lots * lot_size,

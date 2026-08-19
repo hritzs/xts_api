@@ -1,0 +1,2012 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Terminal</title>
+
+    <link rel="stylesheet" href="/static/style.css">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        .panel table {
+            font-size: 14px;
+        }
+
+        .panel th,
+        .panel td {
+            padding: 12px 15px;
+        }
+
+        .details-card.large-card .details-table {
+            font-size: 15px !important;
+        }
+
+        .details-card.large-card .details-table th,
+        .details-card.large-card .details-table td {
+            padding: 12px 15px !important;
+        }
+
+        .portfolio-grid {
+            display: block;
+        }
+
+        .portfolio-grid .panel {
+            margin-bottom: 20px;
+        }
+
+        .score-monitor-box {
+            margin-top: 20px;
+            padding: 16px;
+            border: 1px solid #444;
+            border-radius: 8px;
+            background: #111;
+        }
+
+        .score-monitor-box h3 {
+            margin: 0 0 12px 0;
+            color: #ddd;
+        }
+
+        .score-status-banner {
+            padding: 10px 12px;
+            border-radius: 6px;
+            background: #222;
+            color: #ddd;
+            border: 1px solid #444;
+            margin-top: 12px;
+            font-family: 'Roboto Mono', monospace;
+        }
+
+        .manual-input-box {
+            margin-top: 20px;
+            padding: 16px;
+            border: 1px solid #444;
+            border-radius: 8px;
+            background: #151515;
+        }
+
+        .manual-input-box h3 {
+            margin: 0 0 10px 0;
+            color: #ddd;
+        }
+
+        .manual-input-note {
+            margin: 0 0 14px 0;
+            font-size: 13px;
+            color: #aaa;
+            line-height: 1.5;
+        }
+    </style>
+
+<style>
+
+/* ============================================================
+   LUT SELLING MAIN TAB UI
+============================================================ */
+
+.lut-main-tab-btn {
+    position: relative;
+    font-weight: 700 !important;
+    letter-spacing: 0.2px;
+}
+
+.lut-main-tab-btn::before {
+    content: "";
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: 5px;
+    height: 2px;
+    border-radius: 10px;
+    opacity: 0;
+    transition: opacity .18s ease;
+}
+
+.lut-main-tab-btn.active::before {
+    opacity: 1;
+}
+
+.lut-selling-view {
+    padding: 18px;
+    animation: lutFadeIn .22s ease-out;
+}
+
+@keyframes lutFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+
+/* HERO ------------------------------------------------------ */
+
+.lut-hero-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 30px;
+
+    padding: 26px 30px;
+    margin-bottom: 18px;
+
+    border: 1px solid rgba(88, 132, 255, .26);
+    border-radius: 16px;
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(20, 42, 88, .96),
+            rgba(10, 23, 52, .98)
+        );
+
+    box-shadow:
+        0 14px 40px rgba(0, 0, 0, .22);
+}
+
+.lut-eyebrow {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    opacity: .72;
+    margin-bottom: 7px;
+}
+
+.lut-hero-card h1 {
+    margin: 0;
+    font-size: 29px;
+    line-height: 1.1;
+}
+
+.lut-hero-subtitle {
+    max-width: 820px;
+    margin: 10px 0 14px;
+    opacity: .78;
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+.lut-stage-sequence {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex-wrap: wrap;
+}
+
+.lut-stage-sequence span {
+    padding: 6px 11px;
+    border-radius: 999px;
+
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid rgba(255, 255, 255, .10);
+
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.lut-stage-sequence i {
+    opacity: .45;
+    font-style: normal;
+}
+
+.lut-hero-status {
+    min-width: 180px;
+    text-align: right;
+}
+
+.lut-mode-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    padding: 8px 12px;
+    border-radius: 999px;
+
+    background: rgba(35, 198, 121, .10);
+    border: 1px solid rgba(35, 198, 121, .28);
+
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .65px;
+}
+
+.lut-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #26d07c;
+    box-shadow: 0 0 10px rgba(38, 208, 124, .65);
+}
+
+.lut-hero-rule {
+    margin-top: 13px;
+    font-size: 12px;
+    font-weight: 800;
+    opacity: .66;
+}
+
+
+/* CONTROL / STATUS GRID ----------------------------------- */
+
+.lut-control-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(320px, .85fr);
+    gap: 18px;
+    margin-bottom: 18px;
+}
+
+.lut-card {
+    background:
+        linear-gradient(
+            180deg,
+            rgba(24, 48, 96, .94),
+            rgba(13, 30, 64, .96)
+        );
+
+    border: 1px solid rgba(88, 132, 255, .20);
+    border-radius: 15px;
+
+    padding: 21px;
+
+    box-shadow:
+        0 10px 30px rgba(0, 0, 0, .18);
+}
+
+.lut-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 18px;
+}
+
+.lut-card-kicker {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1.25px;
+    opacity: .54;
+}
+
+.lut-card h2 {
+    margin: 4px 0 0;
+    font-size: 19px;
+}
+
+.lut-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 15px;
+}
+
+.lut-field label {
+    display: block;
+    margin-bottom: 7px;
+    font-size: 11px;
+    font-weight: 700;
+    opacity: .70;
+}
+
+.lut-input,
+.lut-disabled-field {
+    width: 100%;
+    height: 43px;
+
+    box-sizing: border-box;
+
+    border-radius: 9px;
+    border: 1px solid rgba(255, 255, 255, .11);
+
+    background: rgba(5, 14, 31, .64);
+
+    color: inherit;
+
+    padding: 0 12px;
+    font-size: 13px;
+    outline: none;
+}
+
+.lut-input:focus {
+    border-color: rgba(78, 132, 255, .72);
+    box-shadow: 0 0 0 3px rgba(78, 132, 255, .10);
+}
+
+.lut-disabled-field {
+    display: flex;
+    align-items: center;
+
+    color: rgba(255,255,255,.47);
+    font-weight: 700;
+    letter-spacing: .35px;
+}
+
+.lut-info-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+
+    margin-top: 18px;
+
+    overflow: hidden;
+    border-radius: 10px;
+
+    background: rgba(255, 255, 255, .07);
+}
+
+.lut-info-item {
+    padding: 12px;
+    background: rgba(8, 19, 41, .58);
+}
+
+.lut-info-item .label {
+    display: block;
+    font-size: 10px;
+    opacity: .50;
+    margin-bottom: 3px;
+}
+
+.lut-info-item strong {
+    font-size: 12px;
+}
+
+.lut-action-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 19px;
+}
+
+.lut-primary-btn,
+.lut-danger-btn {
+    border: 0;
+    border-radius: 9px;
+    padding: 11px 18px;
+
+    font-size: 12px;
+    font-weight: 800;
+
+    cursor: pointer;
+    transition:
+        transform .12s ease,
+        filter .12s ease;
+}
+
+.lut-primary-btn:hover,
+.lut-danger-btn:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.07);
+}
+
+.lut-primary-btn {
+    background: linear-gradient(135deg, #3478ff, #2359dc);
+    color: white;
+}
+
+.lut-danger-btn {
+    background: rgba(233, 73, 86, .16);
+    border: 1px solid rgba(233, 73, 86, .34);
+    color: #ff929e;
+}
+
+
+/* RUNTIME -------------------------------------------------- */
+
+.lut-live-chip {
+    display: inline-flex;
+    padding: 6px 10px;
+
+    border-radius: 999px;
+
+    font-size: 10px;
+    font-weight: 800;
+
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.10);
+}
+
+.lut-runtime-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+
+.lut-runtime-item {
+    padding: 13px;
+
+    border-radius: 10px;
+
+    background: rgba(5, 15, 32, .44);
+    border: 1px solid rgba(255,255,255,.07);
+}
+
+.lut-runtime-item span {
+    display: block;
+    font-size: 10px;
+    opacity: .50;
+    margin-bottom: 4px;
+}
+
+.lut-runtime-item strong {
+    font-size: 13px;
+}
+
+.lut-engine-message {
+    min-height: 58px;
+
+    display: flex;
+    align-items: center;
+
+    margin-top: 12px;
+    padding: 0 14px;
+
+    border-radius: 10px;
+
+    background: rgba(5, 15, 32, .62);
+    border: 1px solid rgba(255,255,255,.08);
+
+    font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Monaco,
+        Consolas,
+        monospace;
+
+    font-size: 11px;
+    color: rgba(255,255,255,.78);
+}
+
+
+/* TIMELINE ------------------------------------------------- */
+
+.lut-timeline-card {
+    margin-bottom: 18px;
+}
+
+.timeline-header {
+    align-items: center;
+}
+
+.lut-timeline-note {
+    font-size: 11px;
+    opacity: .48;
+}
+
+.lut-timeline {
+    display: grid;
+
+    grid-template-columns:
+        minmax(0, 1fr)
+        auto
+        minmax(0, 1fr)
+        auto
+        minmax(0, 1fr)
+        auto
+        minmax(0, 1fr)
+        auto
+        minmax(0, 1fr);
+
+    gap: 9px;
+    align-items: center;
+}
+
+.lut-stage-card {
+    min-height: 130px;
+
+    padding: 16px;
+
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+
+    border-radius: 13px;
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(11, 27, 57, .94),
+            rgba(6, 16, 34, .98)
+        );
+
+    border: 1px solid rgba(255,255,255,.09);
+}
+
+.lut-stage-time {
+    font-size: 19px;
+    font-weight: 900;
+}
+
+.lut-stage-lut {
+    margin-top: 6px;
+
+    font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Monaco,
+        Consolas,
+        monospace;
+
+    font-size: 10px;
+    opacity: .48;
+}
+
+.lut-stage-state {
+    align-self: flex-start;
+
+    margin-top: 16px;
+
+    padding: 6px 9px;
+
+    border-radius: 7px;
+
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: .45px;
+
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.08);
+}
+
+.lut-stage-connector {
+    font-size: 18px;
+    opacity: .28;
+}
+
+
+/* RULE CARDS ----------------------------------------------- */
+
+.lut-rule-grid {
+    display: grid;
+
+    grid-template-columns:
+        repeat(3, minmax(0, 1fr));
+
+    gap: 14px;
+}
+
+.lut-rule-card {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+
+    padding: 16px;
+
+    border-radius: 12px;
+
+    background: rgba(11, 28, 59, .72);
+    border: 1px solid rgba(255,255,255,.07);
+}
+
+.lut-rule-icon {
+    width: 28px;
+    height: 28px;
+
+    flex: 0 0 auto;
+
+    display: grid;
+    place-items: center;
+
+    border-radius: 8px;
+
+    background: rgba(60, 112, 255, .15);
+    color: #8eb1ff;
+
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.lut-rule-card strong {
+    display: block;
+    font-size: 12px;
+}
+
+.lut-rule-card p {
+    margin: 5px 0 0;
+
+    font-size: 11px;
+    line-height: 1.5;
+
+    opacity: .55;
+}
+
+
+/* RESPONSIVE ----------------------------------------------- */
+
+@media (max-width: 1100px) {
+
+    .lut-control-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .lut-timeline {
+        grid-template-columns: 1fr;
+    }
+
+    .lut-stage-connector {
+        display: none;
+    }
+
+    .lut-rule-grid {
+        grid-template-columns: 1fr;
+    }
+
+}
+
+@media (max-width: 700px) {
+
+    .lut-hero-card {
+        flex-direction: column;
+    }
+
+    .lut-hero-status {
+        text-align: left;
+    }
+
+    .lut-form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .lut-info-strip {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+}
+
+</style>
+
+
+<style>
+/* ============================================================
+   LUT LIVE FACTORS PANEL
+============================================================ */
+
+.lut-factors-card {
+    margin-bottom: 18px;
+}
+
+.lut-factor-live-badge {
+    padding: 6px 10px;
+    border-radius: 999px;
+
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: .65px;
+
+    color: #70e5a6;
+
+    background: rgba(42, 210, 126, .09);
+    border: 1px solid rgba(42, 210, 126, .25);
+}
+
+.lut-factor-grid {
+    display: grid;
+
+    grid-template-columns:
+        repeat(3, minmax(0, 1fr));
+
+    gap: 11px;
+}
+
+.lut-factor-field {
+    min-width: 0;
+}
+
+.lut-factor-field label {
+    display: block;
+
+    margin-bottom: 6px;
+
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .2px;
+
+    opacity: .62;
+}
+
+.lut-factor-field input {
+    width: 100%;
+    height: 39px;
+
+    box-sizing: border-box;
+
+    padding: 0 10px;
+
+    border-radius: 8px;
+
+    border: 1px solid rgba(255,255,255,.09);
+
+    background:
+        rgba(5, 13, 29, .70);
+
+    color:
+        rgba(255,255,255,.92);
+
+    font-size: 11px;
+
+    outline: none;
+}
+
+.lut-factor-field input:focus {
+    border-color:
+        rgba(78, 132, 255, .55);
+}
+
+.lut-factor-status {
+    margin-top: 14px;
+
+    min-height: 40px;
+
+    display: flex;
+    align-items: center;
+
+    padding: 0 13px;
+
+    border-radius: 8px;
+
+    border: 1px solid rgba(255,255,255,.08);
+
+    background:
+        rgba(5, 14, 30, .70);
+
+    font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Monaco,
+        Consolas,
+        monospace;
+
+    font-size: 11px;
+
+    color:
+        rgba(255,255,255,.78);
+}
+
+@media (max-width: 1150px) {
+
+    .lut-factor-grid {
+        grid-template-columns:
+            repeat(2, minmax(0, 1fr));
+    }
+
+}
+
+@media (max-width: 650px) {
+
+    .lut-factor-grid {
+        grid-template-columns: 1fr;
+    }
+
+}
+</style>
+
+</head>
+<body>
+    <div class="container">
+
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1>Trading Terminal</h1>
+                <div class="status-indicators">
+                    <div id="ws-status" class="status-indicator disconnected">
+                        <span class="dot"></span>
+                        <span class="text">OFFLINE</span>
+                    </div>
+                    <div id="socket-status" class="status-indicator disconnected">
+                        <span class="dot"></span>
+                        <span class="text">SOCKET</span>
+                    </div>
+                </div>
+            </div>
+            <div class="header-right">
+                <div id="clock" class="clock">00:00:00</div>
+            </div>
+        </header>
+
+        <!-- Summary Bar -->
+        <div class="summary-bar">
+            <div class="summary-item">
+                <label>Total Live PnL</label>
+                <div id="total-pnl-value" class="summary-value neutral">₹0.00</div>
+            </div>
+            <div class="summary-item">
+                <label>Active Trades</label>
+                <div id="active-trades-count" class="summary-value">0</div>
+            </div>
+            <div class="summary-item">
+                <label>Total Premium</label>
+                <div id="total-premium-received" class="summary-value">₹0.00</div>
+            </div>
+            <div class="summary-item">
+                <label>Net Delta</label>
+                <div id="total-net-delta" class="summary-value neutral">0.00</div>
+            </div>
+        </div>
+
+        <!-- Main Tabs -->
+        <div class="main-tabs">
+            <button class="tab-btn active" onclick="switchMainTab('terminal')">Terminal</button>
+            <button class="tab-btn" onclick="switchMainTab('portfolio')">Portfolio</button>
+            <button class="tab-btn" onclick="switchMainTab('automation')">Automation</button>
+                <button
+                    class="tab-btn lut-main-tab-btn"
+                    onclick="switchMainTab('lut-selling')">
+                    📊 LUT Selling
+                </button>
+                <button
+                    class="tab-btn lut-main-tab-btn"
+                    onclick="switchMainTab('lut-selling')">
+                    📊 LUT Selling
+                </button>
+        </div>
+
+        <!-- Terminal View -->
+        <div id="terminal-view" class="main-tab-content active">
+            <div class="main-grid">
+
+                <!-- Left: Order Entry + Positions -->
+                <div class="panel-container">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Order Entry</h2>
+                        </div>
+                        <div class="panel-content">
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="symbol">Symbol</label>
+                                    <select id="symbol" onchange="loadOptionChain()">
+                                        <option value="NIFTY">NIFTY</option>
+                                        <option value="BANKNIFTY">BANKNIFTY</option>
+                                        <option value="SENSEX">SENSEX</option>
+                                        <option value="FINNIFTY">FINNIFTY</option>
+                                        <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="lots">Approx. Qty</label>
+                                    <input type="number" id="lots" value="65" min="1" oninput="debouncedRoundQuantity('lots')">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="manual_lots_per_call" title="Quantity per broker call">Qty Per Call</label>
+                                    <input type="number" id="manual_lots_per_call" value="65" min="1" oninput="debouncedRoundQuantity('manual_lots_per_call')">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>ATM Strike</label>
+                                    <input type="text" id="atm-strike" readonly value="--">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Straddle Premium</label>
+                                    <input type="text" id="straddle-premium" readonly value="--">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="total-premium">Total Premium</label>
+                                <input type="text" id="total-premium" readonly value="--">
+                            </div>
+
+                            <div class="form-grid">
+
+                                <div class="form-group">
+                                    <label>Entry At Straddle (?)</label>
+                                    <input
+                                        type="number"
+                                        id="entry-at-straddle"
+                                        step="0.05"
+                                        placeholder="e.g. 275.50">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Exit At Straddle (?)</label>
+                                    <input
+                                        type="number"
+                                        id="exit-at-straddle"
+                                        step="0.05"
+                                        placeholder="e.g. 245.00">
+                                </div>
+
+                            </div>
+
+                            <div class="button-group">
+                                <button class="btn btn-primary" onclick="sellStraddle()">🚀 Sell ATM Straddle</button>
+                                <button class="btn btn-secondary" onclick="loadOptionChain()">🔄 Refresh Chain</button>
+                            </div>
+
+                            <hr style="border-color:#444;margin:20px 0;">
+
+                            <h3 style="margin-top:0;margin-bottom:15px;text-align:center;color:#ccc;">Custom Strangle / Straddle</h3>
+
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="custom-ce-strike">Custom CE Strike</label>
+                                    <input type="number" id="custom-ce-strike" placeholder="e.g., 22500" step="50">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="custom-pe-strike">Custom PE Strike</label>
+                                    <input type="number" id="custom-pe-strike" placeholder="e.g., 22400" step="50">
+                                </div>
+                            </div>
+
+                            <div class="form-group checkbox-group" style="justify-content:center;margin-top:10px;margin-bottom:15px;">
+                                <input type="checkbox" id="custom-delta-neutral" checked>
+                                <label for="custom-delta-neutral">Delta Neutral</label>
+                            </div>
+
+                            <div class="button-group">
+                                <button class="btn btn-success" onclick="sellCustomStraddle()">🎯 Sell Custom</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Active Positions</h2>
+                            <button class="btn-icon" onclick="fetchStraddles()">🔄</button>
+                        </div>
+                        <div class="panel-content scrollable" id="straddles-display">
+                            <div class="placeholder">No active positions</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Option Chain + Logs -->
+                <div class="panel-container">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Option Chain</h2>
+                            <div class="chain-header-info">
+                                <span id="chain-header-spot">Spot: <span id="chain-spot-value">--</span></span>
+                                <span id="chain-header-synthetic-spot" style="margin-left:15px;">Syn.Fut: <span id="chain-synfut-value">--</span></span>
+                                <span id="chain-header-atm" style="margin-left:15px;">ATM: <span id="chain-atm-value">--</span></span>
+                                <span id="chain-header-expiry" style="margin-left:15px;">Expiry: <span id="chain-expiry-value">--</span></span>
+                                <span id="chain-header-var" style="margin-left:15px;">VaR(95%): <span id="chain-var-value">--</span></span>
+                            </div>
+                        </div>
+                        <div class="panel-content scrollable" id="option-chain-container">
+                            <div class="placeholder">Loading Option Chain...</div>
+                        </div>
+                    </div>
+
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Event Log</h2>
+                        </div>
+                        <div class="panel-content scrollable" id="log-panel-content">
+                            <div class="log-entry log-info">
+                                <span class="log-timestamp"></span>
+                                <span class="log-level">INFO</span>
+                                <span class="log-message">Terminal initialized. Waiting for connection...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Portfolio View -->
+        <div id="portfolio-view" class="main-tab-content">
+            <div class="portfolio-grid">
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Trade Details</h2>
+                        <button class="btn-icon" onclick="fetchStraddles(true)">🔄</button>
+                    </div>
+                    <div class="panel-content scrollable" id="portfolio-positions-display">
+                        <div class="placeholder">Loading positions...</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Order History (Today)</h2>
+                        <button class="btn-icon" onclick="fetchOrders()">🔄</button>
+                    </div>
+                    <div class="panel-content scrollable" id="portfolio-orders-display">
+                        <div class="placeholder">Loading orders...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        
+<!-- ============================================================
+     FIVE-STAGE LUT SELLING
+     Dedicated top-level trading mode
+============================================================= -->
+<div
+    id="lut-selling-view"
+    class="main-tab-content lut-selling-view">
+
+    <!-- Hero -->
+    <section class="lut-hero-card">
+
+        <div class="lut-hero-left">
+
+            <div class="lut-eyebrow">
+                📊 AUTOMATED STRATEGY
+            </div>
+
+            <h1>Five-Stage LUT Selling</h1>
+
+            <p class="lut-hero-subtitle">
+                Evaluate the shared LUT at each exact minute boundary.
+                The first <strong>YES</strong> decision triggers the
+                existing build engine.
+            </p>
+
+            <div class="lut-stage-sequence">
+                <span>09:16</span>
+                <i>→</i>
+                <span>09:17</span>
+                <i>→</i>
+                <span>09:18</span>
+                <i>→</i>
+                <span>09:19</span>
+                <i>→</i>
+                <span>09:20+</span>
+            </div>
+
+        </div>
+
+        <div class="lut-hero-status">
+
+            <div class="lut-mode-pill">
+                <span class="lut-status-dot"></span>
+                <span id="lut-mode-state">
+                    ENGINE READY
+                </span>
+            </div>
+
+            <div class="lut-hero-rule">
+                FIRST YES → BUILD
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <!-- Controls + Runtime -->
+    <section class="lut-control-grid">
+
+        <!-- Controls -->
+        <div class="lut-card">
+
+            <div class="lut-card-header">
+                <div>
+                    <span class="lut-card-kicker">
+                        STRATEGY CONTROLS
+                    </span>
+                    <h2>Execution Settings</h2>
+                </div>
+            </div>
+
+            <div class="lut-form-grid">
+
+                <div class="lut-field">
+                    <label for="lut-stage-symbol">
+                        Symbol
+                    </label>
+
+                    <select
+                        id="lut-stage-symbol"
+                        class="lut-input">
+                        <option value="NIFTY">
+                            NIFTY
+                        </option>
+                        <option value="BANKNIFTY">
+                            BANKNIFTY
+                        </option>
+                        <option value="SENSEX">
+                            SENSEX
+                        </option>
+                        <option value="FINNIFTY">
+                            FINNIFTY
+                        </option>
+                        <option value="MIDCPNIFTY">
+                            MIDCPNIFTY
+                        </option>
+                    </select>
+                </div>
+
+                <div class="lut-field">
+                    <label for="lut-stage-size">
+                        Approx. Quantity
+                    </label>
+
+                    <input
+                        type="number"
+                        id="lut-stage-size"
+                        class="lut-input"
+                        value="77"
+                        min="1">
+                </div>
+
+                <div class="lut-field">
+                    <label for="lut-stage-exit-time">
+                        Stop Checking / Exit Time
+                    </label>
+
+                    <input
+                        type="time"
+                        id="lut-stage-exit-time"
+                        class="lut-input"
+                        value="15:27:00"
+                        step="1">
+                </div>
+
+                <div class="lut-field">
+                    <label>
+                        Entry Time
+                    </label>
+
+                    <div class="lut-disabled-field">
+                        AUTOMATIC
+                    </div>
+                </div>
+
+            </div>
+
+
+            <div class="lut-info-strip">
+
+                <div class="lut-info-item">
+                    <span class="label">LUT Start</span>
+                    <strong>09:16</strong>
+                </div>
+
+                <div class="lut-info-item">
+                    <span class="label">Evaluation</span>
+                    <strong>Every Minute</strong>
+                </div>
+
+                <div class="lut-info-item">
+                    <span class="label">Decision</span>
+                    <strong>First YES</strong>
+                </div>
+
+                <div class="lut-info-item">
+                    <span class="label">Normal Entry Time</span>
+                    <strong>Ignored</strong>
+                </div>
+
+            </div>
+
+
+            <div class="lut-action-row">
+
+                <button
+                    id="start-lut-stage-build"
+                    type="button"
+                    class="lut-primary-btn">
+                    <span>▶</span>
+                    Start LUT Selling
+                </button>
+
+                <button
+                    id="stop-lut-stage-build"
+                    type="button"
+                    class="lut-danger-btn">
+                    <span>■</span>
+                    Stop
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <!-- Runtime Status -->
+        <div class="lut-card lut-runtime-card">
+
+            <div class="lut-card-header">
+                <div>
+                    <span class="lut-card-kicker">
+                        LIVE ENGINE
+                    </span>
+                    <h2>Current Status</h2>
+                </div>
+
+                <span
+                    class="lut-live-chip"
+                    id="lut-live-chip">
+                    READY
+                </span>
+            </div>
+
+
+            <div class="lut-runtime-grid">
+
+                <div class="lut-runtime-item">
+                    <span>Mode</span>
+                    <strong>Five-Stage</strong>
+                </div>
+
+                <div class="lut-runtime-item">
+                    <span>Current Stage</span>
+                    <strong id="lut-current-stage">
+                        WAITING
+                    </strong>
+                </div>
+
+                <div class="lut-runtime-item">
+                    <span>Next Evaluation</span>
+                    <strong id="lut-next-stage">
+                        09:16
+                    </strong>
+                </div>
+
+                <div class="lut-runtime-item">
+                    <span>Entry Trigger</span>
+                    <strong>FIRST YES</strong>
+                </div>
+
+            </div>
+
+
+            <div
+                id="lut-stage-status"
+                class="lut-engine-message">
+                LUT stage engine ready.
+            </div>
+
+        </div>
+
+    </section>
+
+
+    
+<!-- ============================================================
+     LIVE LUT FACTORS
+     Dedicated copy for Five-Stage LUT Selling
+============================================================= -->
+<section
+    id="lut-factor-panel"
+    class="lut-card lut-factors-card">
+
+    <div class="lut-card-header">
+
+        <div>
+            <span class="lut-card-kicker">
+                LIVE LUT FACTORS
+            </span>
+
+            <h2>
+                Current Inputs & Buckets
+            </h2>
+        </div>
+
+        <div class="lut-factor-live-badge">
+            ● LIVE
+        </div>
+
+    </div>
+
+
+    <div class="lut-factor-grid">
+
+        <div class="lut-factor-field">
+            <label>Live IV</label>
+            <input
+                id="lut-score-live-iv"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Live IV (Decimal)</label>
+            <input
+                id="lut-score-live-iv-decimal"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Adjusted IV (Build IV)</label>
+            <input
+                id="lut-score-adj-iv"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Build IV Bucket</label>
+            <input
+                id="lut-score-build-iv-bucket"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Live Straddle</label>
+            <input
+                id="lut-score-live-straddle"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Adjusted IDV</label>
+            <input
+                id="lut-score-adj-idv"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>DTE Bucket (Day)</label>
+            <input
+                id="lut-score-dte-bucket"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Prev Day Adj IV</label>
+            <input
+                id="lut-score-prev-day-adj-iv"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Prev Day Straddle</label>
+            <input
+                id="lut-score-prev-straddle"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>IV / IDV Ratio</label>
+            <input
+                id="lut-score-iv-idv-ratio"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>IV Ratio Bucket</label>
+            <input
+                id="lut-score-iv-ratio-bucket"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Straddle Ratio</label>
+            <input
+                id="lut-score-straddle-ratio"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Straddle Ratio Bucket</label>
+            <input
+                id="lut-score-straddle-ratio-bucket"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Adj IV Chg</label>
+            <input
+                id="lut-score-adj-iv-chg"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Adj IV Chg Bucket</label>
+            <input
+                id="lut-score-adj-iv-chg-bucket"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Prev Day Future Close</label>
+            <input
+                id="lut-score-future-price-ref"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>9:18 / Manual Ref. Spot</label>
+            <input
+                id="lut-score-synthetic-price-ref"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Ref. Spot Source</label>
+            <input
+                id="lut-score-price-ref-source"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>OG Gap %</label>
+            <input
+                id="lut-score-og-gap-pct"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Normalized OG Gap</label>
+            <input
+                id="lut-score-norm-og-gap"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+        <div class="lut-factor-field">
+            <label>Norm OG Gap Bucket</label>
+            <input
+                id="lut-score-norm-og-gap-bucket"
+                type="text"
+                readonly
+                value="--">
+        </div>
+
+    </div>
+
+
+    <div
+        id="lut-score-status-banner"
+        class="lut-factor-status">
+        Waiting for score...
+    </div>
+
+</section>
+
+
+<!-- Stage Timeline -->
+    <section class="lut-card lut-timeline-card">
+
+        <div class="lut-card-header timeline-header">
+
+            <div>
+                <span class="lut-card-kicker">
+                    FIVE-STAGE EVALUATION
+                </span>
+
+                <h2>Minute-by-Minute LUT Timeline</h2>
+            </div>
+
+            <div class="lut-timeline-note">
+                Exact minute boundaries only
+            </div>
+
+        </div>
+
+
+        <div class="lut-timeline">
+
+            <div class="lut-stage-card">
+                <div class="lut-stage-time">
+                    09:16
+                </div>
+
+                <div class="lut-stage-lut">
+                    LUT_0916
+                </div>
+
+                <div
+                    id="lut-stage-0916"
+                    class="lut-stage-state">
+                    WAITING
+                </div>
+            </div>
+
+
+            <div class="lut-stage-connector">
+                →
+            </div>
+
+
+            <div class="lut-stage-card">
+                <div class="lut-stage-time">
+                    09:17
+                </div>
+
+                <div class="lut-stage-lut">
+                    LUT_0917
+                </div>
+
+                <div
+                    id="lut-stage-0917"
+                    class="lut-stage-state">
+                    WAITING
+                </div>
+            </div>
+
+
+            <div class="lut-stage-connector">
+                →
+            </div>
+
+
+            <div class="lut-stage-card">
+                <div class="lut-stage-time">
+                    09:18
+                </div>
+
+                <div class="lut-stage-lut">
+                    LUT_0918
+                </div>
+
+                <div
+                    id="lut-stage-0918"
+                    class="lut-stage-state">
+                    WAITING
+                </div>
+            </div>
+
+
+            <div class="lut-stage-connector">
+                →
+            </div>
+
+
+            <div class="lut-stage-card">
+                <div class="lut-stage-time">
+                    09:19
+                </div>
+
+                <div class="lut-stage-lut">
+                    LUT_0919
+                </div>
+
+                <div
+                    id="lut-stage-0919"
+                    class="lut-stage-state">
+                    WAITING
+                </div>
+            </div>
+
+
+            <div class="lut-stage-connector">
+                →
+            </div>
+
+
+            <div class="lut-stage-card lut-stage-card-final">
+                <div class="lut-stage-time">
+                    09:20+
+                </div>
+
+                <div class="lut-stage-lut">
+                    LUT_0920+
+                </div>
+
+                <div
+                    id="lut-stage-0920"
+                    class="lut-stage-state">
+                    WAITING
+                </div>
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <!-- Rules -->
+    <section class="lut-rule-grid">
+
+        <div class="lut-rule-card">
+            <div class="lut-rule-icon">①</div>
+
+            <div>
+                <strong>Every Minute</strong>
+                <p>
+                    The engine evaluates the current minute's
+                    shared LUT only once.
+                </p>
+            </div>
+        </div>
+
+
+        <div class="lut-rule-card">
+            <div class="lut-rule-icon">②</div>
+
+            <div>
+                <strong>NO Is Not Final</strong>
+                <p>
+                    A NO decision waits for the next LUT stage
+                    rather than cancelling the strategy.
+                </p>
+            </div>
+        </div>
+
+
+        <div class="lut-rule-card">
+            <div class="lut-rule-icon">③</div>
+
+            <div>
+                <strong>First YES Builds</strong>
+                <p>
+                    The first matching LUT decision triggers
+                    the existing build execution path.
+                </p>
+            </div>
+        </div>
+
+    </section>
+
+</div>
+
+
+<!-- Automation View -->
+        <div id="automation-view" class="main-tab-content">
+            <div class="panel">
+                <div class="panel-header">
+                    
+
+
+<h2>🤖 Configuration-Based Build</h2>
+                </div>
+
+                <div class="panel-content" id="config-build-form">
+                    <div class="form-grid" style="grid-template-columns:repeat(4,1fr);">
+                        <div class="form-group">
+                            <label for="config-symbol">Symbol</label>
+                            <select id="config-symbol" name="config-symbol">
+                                <option value="NIFTY">NIFTY</option>
+                                <option value="BANKNIFTY">BANKNIFTY</option>
+                                <option value="SENSEX">SENSEX</option>
+                                <option value="FINNIFTY">FINNIFTY</option>
+                                <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-size">Approx. Qty</label>
+                            <input type="number" id="config-size" name="config-size" value="25025" min="1" oninput="debouncedRoundQuantity('config-size')">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-ce-strike">CE Strike (Optional)</label>
+                            <input type="number" id="config-ce-strike" name="config-ce-strike" placeholder="e.g., 22500">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-pe-strike">PE Strike (Optional)</label>
+                            <input type="number" id="config-pe-strike" name="config-pe-strike" placeholder="e.g., 22400">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="auto_lots_per_call">Qty Per Call</label>
+                            <input type="number" id="auto_lots_per_call" name="auto_lots_per_call" value="65" min="1" oninput="debouncedRoundQuantity('auto_lots_per_call')">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-entry-time">Entry Time</label>
+                            <input type="time" id="config-entry-time" name="config-entry-time" value="09:18:00" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-exit-time">Exit Time</label>
+                            <input type="time" id="config-exit-time" name="config-exit-time" value="15:27:00" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label>Rule</label>
+                            <input type="text" id="config-score-rule" value="LUT Decision is YES" readonly>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-sl-bps">SL (bps)</label>
+                            <input type="number" id="config-sl-bps" name="config-sl-bps" value="14">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-straddle-stop-pct" title="Stop building if straddle price drops by this % of reference.">Straddle Stop %</label>
+                            <input type="number" id="config-straddle-stop-pct" name="config-straddle-stop-pct" value="1.0" step="0.1">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="config-tp-bps">TP (bps)</label>
+                            <input type="number" id="config-tp-bps" name="config-tp-bps" placeholder="e.g. 20">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-exit-at-straddle">Exit At Straddle</label>
+                            <input
+                                type="number"
+                                id="config-exit-at-straddle"
+                                name="config-exit-at-straddle"
+                                step="0.05"
+                                placeholder="e.g. 125.50">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="config-hedge-div">Hedge Divisor</label>
+                            <input type="number" id="config-hedge-div" name="config-hedge-div" value="57">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-straddle-div">Hedge Straddle Divisor</label>
+                            <input type="number" id="config-straddle-div" name="config-straddle-div" value="4">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-roll-straddle-div">Roll Straddle Divisor</label>
+                            <input type="number" id="config-roll-straddle-div" name="config-roll-straddle-div" value="0.001" step="0.1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-hedge-frac">Hedge Fraction</label>
+                            <input type="number" step="0.1" id="config-hedge-frac" name="config-hedge-frac" value="1.0">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-sl-interval">SL Interval (s)</label>
+                            <input type="number" step="0.1" id="config-sl-interval" name="config-sl-interval" value="60" min="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-hedge-interval">Hedge Interval (s)</label>
+                            <input type="number" step="0.1" id="config-hedge-interval" name="config-hedge-interval" value="60" min="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-roll-interval">Roll Interval (s)</label>
+                            <input type="number" step="0.1" id="config-roll-interval" name="config-roll-interval" value="60" min="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-hedge-start-time">Hedge Start</label>
+                            <input type="time" id="config-hedge-start-time" name="config-hedge-start-time" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-sl-start-time">SL Start</label>
+                            <input type="time" id="config-sl-start-time" name="config-sl-start-time" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-roll-start-time">Roll Start</label>
+                            <input type="time" id="config-roll-start-time" name="config-roll-start-time" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-buy-buffer">Buy Buffer (₹)</label>
+                            <input type="number" id="config-buy-buffer" name="config-buy-buffer" value="2" min="0">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="config-sell-buffer">Sell Buffer (₹)</label>
+                            <input type="number" id="config-sell-buffer" name="config-sell-buffer" value="2" min="0">
+                        </div>
+                    </div>
+
+                    <!-- Manual Reference Inputs -->
+                    <div class="manual-input-box">
+                        <h3>Manual Reference Inputs</h3>
+                        <p class="manual-input-note">
+                            Use these only when auto-fetch fails. If auto data is missing, these values will be used for score preview and build.
+                        </p>
+
+                        <div class="form-grid" style="grid-template-columns:repeat(4,1fr); gap:12px;">
+                            <div class="form-group">
+                                <label for="config-manual-latest-idv">Manual Latest IDV</label>
+                                <input
+                                    type="number"
+                                    id="config-manual-latest-idv"
+                                    name="config-manual-latest-idv"
+                                    step="0.000001"
+                                    min="0"
+                                    placeholder="e.g. 0.142000"
+                                >
+                            </div>
+
+                            <div class="form-group">
+                                <label for="config-manual-historical-idv">Manual Historical IDV</label>
+                                <input
+                                    type="number"
+                                    id="config-manual-historical-idv"
+                                    name="config-manual-historical-idv"
+                                    step="0.000001"
+                                    min="0"
+                                    placeholder="e.g. 0.138000"
+                                >
+                            </div>
+
+                            <div class="form-group">
+                                <label for="config-manual-prev-day-straddle">Manual Prev Day Straddle</label>
+                                <input
+                                    type="number"
+                                    id="config-manual-prev-day-straddle"
+                                    name="config-manual-prev-day-straddle"
+                                    step="0.01"
+                                    min="0"
+                                    placeholder="e.g. 245.50"
+                                >
+                            </div>
+
+                            <div class="form-group">
+                                <label for="config-manual-spot-price">Manual Spot Price</label>
+                                <input
+                                    type="number"
+                                    id="config-manual-spot-price"
+                                    name="config-manual-spot-price"
+                                    step="0.01"
+                                    min="0"
+                                    placeholder="e.g. 24200.50"
+                                >
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="score-monitor-box">
+                        <h3>Live LUT Factors</h3>
+
+                        <div class="form-grid" style="grid-template-columns:repeat(3,1fr); gap:12px;">
+                            <div class="form-group">
+                                <label>Live IV</label>
+                                <input type="text" id="score-live-iv" readonly value="--">
+                            </div>
+                            <div class="form-group">
+                                <label>Live IV (Decimal)</label>
+                                <input type="text" id="score-live-iv-decimal" readonly value="--">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Adjusted IV (Build IV)</label>
+                                <input type="text" id="score-adj-iv" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Build IV Bucket</label>
+                                <input type="text" id="score-build-iv-bucket" readonly value="--" >
+                            </div>
+
+                            <div class="form-group">
+                                <label>Live Straddle</label>
+                                <input type="text" id="score-live-straddle" readonly value="--">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Adjusted IDV</label>
+                                <input type="text" id="score-adj-idv" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>DTE Bucket (Day)</label>
+                                <input type="text" id="score-dte-bucket" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Prev Day Adj IV</label>
+                                <input type="text" id="score-prev-day-adj-iv" readonly value="--" >
+                            </div>
+
+                            <div class="form-group">
+                                <label>Prev Day Straddle</label>
+                                <input type="text" id="score-prev-straddle" readonly value="--">
+                            </div>
+
+                            <div class="form-group">
+                                <label>IV / IDV Ratio (adj_iv/adj_idv)</label>
+                                <input type="text" id="score-iv-idv-ratio" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>IV Ratio Bucket</label>
+                                <input type="text" id="score-iv-ratio-bucket" readonly value="--" >
+                            </div>
+
+                            <div class="form-group">
+                                <label>Straddle Ratio (prev/live)</label>
+                                <input type="text" id="score-straddle-ratio" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Straddle Ratio Bucket</label>
+                                <input type="text" id="score-straddle-ratio-bucket" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Adj IV Chg</label>
+                                <input type="text" id="score-adj-iv-chg" readonly value="--" >
+                            </div>
+
+                            <div class="form-group">
+                                <label>Adj IV Chg Bucket</label>
+                                <input type="text" id="score-adj-iv-chg-bucket" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Prev Day Future Close</label>
+                                <input type="text" id="score-future-price-ref" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>9:18/Manual Ref. Spot</label>
+                                <input type="text" id="score-synthetic-price-ref" readonly value="--" >
+                            </div>
+                             <div class="form-group">
+                                <label>Ref. Spot Source</label>
+                                <input type="text" id="score-price-ref-source" readonly value="--" >
+                            </div>
+                             <div class="form-group">
+                                <label>OG Gap %</label>
+                                <input type="text" id="score-og-gap-pct" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Normalized OG Gap (Value)</label>
+                                <input type="text" id="score-norm-og-gap" readonly value="--" >
+                            </div>
+                            <div class="form-group">
+                                <label>Norm OG Gap Bucket</label>
+                                <input type="text" id="score-norm-og-gap-bucket" readonly value="--" >
+                            </div>
+                        </div>
+
+                        <div id="score-status-banner" class="score-status-banner dual-lut-container">
+                            <table class="dual-lut-table">
+                                <thead><tr><th>Rule</th><th>Decision</th></tr></thead>
+                                <tbody>
+                                    <tr><td>LUT 1</td><td id="score-decision-1">--</td></tr>
+                                    <tr><td>LUT 2</td><td id="score-decision-2">--</td></tr>
+                                    <tr><td>Final Size</td><td id="score-size-multiplier">--</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="button-group">
+                        <button class="btn btn-primary" id="btn-config-build">▶️ Start Automated Build</button>
+                        <button class="btn" id="btn-save-config">💾 Save</button>
+                        <button class="btn" id="btn-load-config">📂 Load</button>
+                    </div>
+
+                    <div id="config-status-content" style="margin-top:20px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/ui.js?v=6" defer></script>
+    <script src="/static/straddles.js?v=6" defer></script>
+    <script src="/static/orders.js?v=6" defer></script>
+    <script src="/static/config_build.js?v=8" defer></script>
+    <script src="/static/option_chain.js?v=6" defer></script>
+    <script src="/static/websocket.js?v=6" defer></script>
+    <script src="/static/init.js?v=6" defer></script>
+</body>
+</html>

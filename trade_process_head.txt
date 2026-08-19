@@ -1,0 +1,298 @@
+"""
+Trade Process Worker
+
+This module contains the entry point and logic for a dedicated process
+that manages the entire lifecycle of a single trade.
+"""
+
+import asyncio
+import multiprocessing
+import time
+import logging
+import os
+import queue
+import traceback
+from typing import Dict, List, Optional
+
+from utils.logger import logger
+from models.state import state
+import config
+from database.db_manager import Database
+from market_data.data_client import (
+    initialize_market_data_client,
+    close_market_data_client,
+    sync_prices_from_service_loop,
+)
+from trading.trade_manager import TradeManager, register_event_handlers
+
+
+def setup_process_logging(trade_uid: str):
+    """Sets up a file handler for the specific trade process."""
+    try:
+        log_dir = "logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+
+        log_file = os.path.join(log_dir, f"trade_{trade_uid}.log")
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        formatter = logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    except Exception as e:
+        logger.error(f"Failed to setup process logging for {trade_uid}: {e}")
+
+
+def _normalize_symbol(symbol: Optional[str]) -> Optional[str]:
+    if not symbol:
+        return None
+    return str(symbol).strip().upper()
+
+
+def _safe_put_command_reply(command_q: multiprocessing.Queue, payload: Dict):
+    """
+    Optional helper for UI traceback propagation:
+    if your parent process chooses to read replies from same queue or another channel,
+    this keeps a structured payload shape.
+    """
+    try:
+        command_q.put_nowait(payload)
+    except Exception:
+        pass
+
+
+async def trade_process_worker(
+    trade_uid: str,
+    initial_trade_data: Dict,
+    command_q: multiprocessing.Queue,
+    shared_trade_data_cache: Dict,
+    initial_orders: List[Dict] = None,
+):
+    """The main async worker for a single trade process."""
+    setup_process_logging(trade_uid)
+    logger.info(f"🚀 Process for trade {trade_uid} started.")
+
+    loop = asyncio.get_running_loop()
+    price_sync_task = None
+    event_bus_task = None
+    manager = None
+
+    state.db = Database()
+
+    if shared_trade_data_cache is not None:
+        state.trade_data_cache = shared_trade_data_cache
+    else:
+        state.trade_data_cache = {}
+
+    if initial_trade_data and initial_trade_data.get("status") == "PENDING_ENTRY":
+        pending_context = state.get_pending_entry_context(trade_uid)
+        if pending_context is None:
+            state.set_pending_entry_context(trade_uid, {
+                "trade_uid": trade_uid,
+                "symbol": initial_trade_data.get("symbol"),
+                "lots": initial_trade_data.get("lots", 1),
+                "trade_config": initial_trade_data.get("config") or {},
+                "delta_neutral": True,
+                "product_type": initial_trade_data.get("product_type", "MIS"),
+            })
+
+    symbol = _normalize_symbol(
+        initial_trade_data.get("symbol")
+        or initial_trade_data.get("index_name")
+        or initial_trade_data.get("underlying")
+    )
+    if symbol:
+        logger.info(f"[{trade_uid}] Worker boot symbol={symbol} (no local option-chain copy injected).")
+
+    from trading.event_bus import EventBus, set_event_bus
+
+    local_event_bus = EventBus()
+    set_event_bus(local_event_bus)
+    event_bus_task = asyncio.create_task(local_event_bus.process_events())
+    logger.info(f"✅ Local event bus initialized for {trade_uid}")
+
+    register_event_handlers()
+
+    state.trade_fill_cache = {}
+    state.order_to_trade_map = {}
+
+    if initial_orders:
+        state.seed_trade_fills(trade_uid, initial_orders)
+        logger.info(f"Worker fill cache seeded with {len(initial_orders)} orders for {trade_uid}.")
+
+    await initialize_market_data_client()
+    price_sync_task = asyncio.create_task(sync_prices_from_service_loop())
+
+    manager = TradeManager(trade_uid, initial_trade_data)
+    await manager.start_monitoring()
+
+    monitor_check_interval = 1.0
+    last_check_time = 0.0
+
+    try:
+        while True:
+            while True:
+                try:
+                    command_data = command_q.get_nowait()
+                except queue.Empty:
+                    break
+
+                command = command_data.get("command")
+                if not command:
+                    logger.debug(f"Ignoring non-command queue payload for {trade_uid}: {command_data}")
+                    continue
+                logger.info(f"📨 Command received: {command} for {trade_uid}")
+
+                try:
+                    if command == "HEDGE":
+                        from trading.hedger import execute_synthetic_hedge
+
+                        snapshot = state.trade_snapshots.get(trade_uid)
+                        if snapshot:
+                            net_delta = snapshot.get("net_delta", 0.0)
+                            logger.info(f"Manual HEDGE triggered for {trade_uid} with net_delta: {net_delta}")
+                            await execute_synthetic_hedge(
+                                trade_uid,
+                                net_delta,
+                                target_delta_reduction=-net_delta
+                            )
+                        else:
+                            raise RuntimeError(f"No snapshot available for hedge on {trade_uid}")
+
+                    elif command == "ROLL":
+                        from trading.roller import roll_position
+
+                        logger.info(f"Manual ROLL triggered for {trade_uid}")
+                        await roll_position(trade_uid)
+
+                    elif command == "SQUARE_OFF":
+                        from trading.square_off import square_off
+
+                        reason = command_data.get("reason")
+                        latest_trade_data = await loop.run_in_executor(None, state.db.get_straddle_by_id, trade_uid)
+                        if not latest_trade_data:
+                            raise RuntimeError(f"Trade data not found for square-off: {trade_uid}")
+
+                        await square_off(
+                            trade_uid=trade_uid,
+                            straddle_data=latest_trade_data,
+                            reason=reason,
+                        )
+                        return
+
+                    elif command == "STOP":
+                        logger.info(f"🛑 STOP command for {trade_uid}. Shutting down.")
+                        return
+
+                    elif command == "UPDATE_CONFIG":
+                        new_config = command_data.get("data") or command_data.get("config")
+                        if new_config:
+                            await manager.update_configuration(new_config)
+
+                    elif command == "PARTIAL_SQUARE_OFF":
+                        from trading.square_off import partial_square_off
+
+                        percentage = command_data.get("percentage")
+                        if percentage is not None:
+                            logger.info(f"Manual PARTIAL SQUARE OFF ({percentage}%) triggered for {trade_uid}")
+                            await partial_square_off(trade_uid, percentage)
+                        else:
+                            raise ValueError(
+                                f"Cannot execute partial square off for {trade_uid}: missing 'percentage'."
+                            )
+
+                except Exception as cmd_e:
+                    tb = traceback.format_exc()
+                    logger.error(
+                        f"Command {command} failed for {trade_uid}: {cmd_e}\n{tb}"
+                    )
+                    _safe_put_command_reply(command_q, {
+                        "type": "command_error",
+                        "trade_uid": trade_uid,
+                        "command": command,
+                        "error": str(cmd_e),
+                        "traceback": tb,
+                    })
+
+            await manager.run_condition_tasks()
+
+            trade_data = await loop.run_in_executor(None, state.db.get_straddle_by_id, trade_uid)
+            trade_status = trade_data.get("status") if trade_data else None
+            if trade_status and (
+                trade_status.startswith("CLOSED")
+                or trade_status in ("FAILED_FILTER", "CANCELLED", "PARTIAL")
+            ) and trade_status != "PENDING_ENTRY":
+                logger.info(f"Trade {trade_uid} reached terminal status ({trade_status}). Shutting down.")
+                return
+
+            await asyncio.sleep(0.1)
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(f"❌ Unhandled exception in trade process for {trade_uid}: {e}\n{tb}")
+        _safe_put_command_reply(command_q, {
+            "type": "process_error",
+            "trade_uid": trade_uid,
+            "error": str(e),
+            "traceback": tb,
+        })
+
+    finally:
+        logger.info(f"🛑 Shutting down trade process for {trade_uid}.")
+
+        if price_sync_task:
+            price_sync_task.cancel()
+            try:
+                await price_sync_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"[{trade_uid}] Error while stopping price_sync_task: {e}", exc_info=True)
+
+        if event_bus_task:
+            event_bus_task.cancel()
+            try:
+                await event_bus_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"[{trade_uid}] Error while stopping event_bus_task: {e}", exc_info=True)
+
+        if manager:
+            try:
+                await manager.stop_monitoring()
+            except Exception as e:
+                logger.error(f"[{trade_uid}] Error while stopping manager monitors: {e}", exc_info=True)
+
+        try:
+            await close_market_data_client()
+        except Exception as e:
+            logger.error(f"[{trade_uid}] Error while closing market data client: {e}", exc_info=True)
+
+        try:
+            if state.db:
+                state.db.close()
+        except Exception as e:
+            logger.error(f"[{trade_uid}] Error while closing DB: {e}", exc_info=True)
+
+        logger.info(f"✅ Process for {trade_uid} finished.")
+
+def trade_process_worker_entry(
+    trade_uid: str,
+    initial_trade_data: Dict,
+    command_q: multiprocessing.Queue,
+    shared_trade_data_cache: Dict,
+    initial_orders: List[Dict] = None,
+):
+    """Synchronous entry point for multiprocessing.Process."""
+    asyncio.run(
+        trade_process_worker(
+            trade_uid=trade_uid,
+            initial_trade_data=initial_trade_data,
+            command_q=command_q,
+            shared_trade_data_cache=shared_trade_data_cache,
+            initial_orders=initial_orders,
+        )
+    )

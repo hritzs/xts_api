@@ -161,13 +161,13 @@ class EventBus:
                 priority_name = EventPriority(event.priority).name
                 flight_key    = f"{event.event_type}:{event.trade_uid}"
 
-                logger.info("=" * 100)
+                logger.debug("=" * 100)
                 logger.info(
                     f"🎯 Dispatching: {event.event_type} | "
                     f"P{event.priority}({priority_name}) | "
                     f"Trade: {event.trade_uid}"
                 )
-                logger.info("=" * 100)
+                logger.debug("=" * 100)
 
                 handlers = self.handlers.get(event.event_type, [])
 

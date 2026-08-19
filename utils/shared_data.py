@@ -104,7 +104,15 @@ class SharedDataManager:
         self.shm_prices.close()
         self.shm_tokens.close()
         if self.is_creator and unlink:
-            self.shm_prices.unlink()
-            self.shm_tokens.unlink()
+            try:
+                self.shm_prices.unlink()
+            except FileNotFoundError:
+                pass
+                
+            try:
+                self.shm_tokens.unlink()
+            except FileNotFoundError:
+                pass
+                
             if self.manager:
                 self.manager.shutdown()

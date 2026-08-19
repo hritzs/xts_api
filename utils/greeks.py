@@ -4,7 +4,7 @@ Calculates IV, Delta, Gamma, Vega, Theta for options
 """
 
 import numpy as np
-from numba import njit
+# from numba import njit
 import math
 from utils.logger import logger
 import warnings
@@ -13,17 +13,17 @@ from typing import Dict, Optional
 warnings.simplefilter('ignore')
 
 
-@njit(cache=True, fastmath=True)
+# # # @njit(cache=True, fastmath=True)
 def _norm_pdf(x: float) -> float:
     return np.exp(-x**2 / 2.0) / (np.sqrt(2 * np.pi))
 
 
-@njit(cache=True, fastmath=True)
+# # # @njit(cache=True, fastmath=True)
 def _norm_cdf(x: float) -> float:
     return (1.0 + math.erf(x / np.sqrt(2.0))) / 2.0
 
 
-@njit(cache=True, fastmath=True)
+# # # @njit(cache=True, fastmath=True)
 def blackScholes(calculation_type: str, option_type: str, K: float, S: float,
                  T: float, sigma: float, r: float = 0.0) -> float:
     """
@@ -97,7 +97,7 @@ def blackScholes(calculation_type: str, option_type: str, K: float, S: float,
     return np.nan
 
 
-@njit(cache=True)
+# # # # # # @njit(cache=True)
 def implied_volatility(option_type: str, K: float, S: float, T: float,
                        option_price: float, r: float = 0.0,
                        tol: float = 0.0001, max_iterations: int = 100) -> float:
@@ -137,11 +137,12 @@ def implied_volatility(option_type: str, K: float, S: float, T: float,
     else:
         intrinsic = max(0.0, K - S)
 
+
     if option_price <= intrinsic:
         return 0.0
 
     # --- FIX: Replaced try/except (ValueError, ZeroDivisionError) with guard checks ---
-    # Numba @njit does NOT support catching multiple exception types as a tuple.
+    # Numba # # # @njit does NOT support catching multiple exception types as a tuple.
     # All error conditions are handled with explicit numerical guards instead.
     T_in_years = T / 365.0
     if T_in_years <= 0.0:
@@ -236,12 +237,12 @@ def calculate_all_greeks(option_type: str, K: float, S: float, T: float,
             if option_price <= intrinsic:
                 # This is expected for ITM options with bad prices, log as debug instead of warning
                 logger.debug(
-                    f"Greeks: IV is 0 because price {option_price:.2f} <= intrinsic {intrinsic:.2f} for {option_type} K={K} S={S}. "
+                    f"Greeks: IV is 0 because price {option_price} <= intrinsic {intrinsic} for {option_type} K={K} S={S}. "
                     "This is expected for ITM options and will be corrected using OTM IV."
                 )
             else:
                 logger.warning(
-                    f"Greeks: IV is NaN or 0 for {option_type} K={K} S={S} T={T:.4f} P={option_price}. Returning zero greeks."
+                    f"Greeks: IV is NaN or 0 for {option_type} K={K} S={S} T={T} P={option_price}. Returning zero greeks."
                 )
             return _zero
 
@@ -312,8 +313,8 @@ if __name__ == "__main__":
 
     print("\nCalculated Greeks:")
     print(f"IV:    {greeks['iv']:.2%}")
-    print(f"Delta: {greeks['delta']:.4f}")
-    print(f"Gamma: {greeks['gamma']:.6f}")
-    print(f"Vega:  {greeks['vega']:.4f}")
-    print(f"Theta: {greeks['theta']:.4f}")
+    print(f"Delta: {greeks['delta']}")
+    print(f"Gamma: {greeks['gamma']}")
+    print(f"Vega:  {greeks['vega']}")
+    print(f"Theta: {greeks['theta']}")
     print("=" * 60)

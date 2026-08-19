@@ -6,144 +6,148 @@ from utils.logger import logger
 from models.state import state
 import config
 
+from market_data.data_client import (
+    get_option_chain_from_service as zmq_get_option_chain_from_service,
+    get_spot_details_from_service as zmq_get_spot_details_from_service,
+    get_ltp_from_service as zmq_get_ltp_from_service,
+    get_bulk_ltp_from_service as zmq_get_bulk_ltp_from_service,
+    get_bulk_market_depth_from_service as zmq_get_bulk_market_depth_from_service,
+    subscribe_active_straddles as zmq_subscribe_active_straddles,
+)
 
 # ── Service URLs ──────────────────────────────────────────────────────────────
-MARKET_DATA_SERVICE_URL = f"http://localhost:{config.MARKET_DATA_PORT}"
-SNAPSHOT_SERVICE_URL    = f"http://localhost:{getattr(config, 'SNAPSHOT_SERVICE_PORT', 8003)}"
+SNAPSHOT_SERVICE_URL = f"http://127.0.0.1:{getattr(config, 'SNAPSHOT_SERVICE_PORT', 8003)}"
+
+# Kept only for compatibility/logging; market data itself is ZMQ-based now.
+MARKET_DATA_SERVICE_URL = f"zmq://127.0.0.1:{getattr(config, 'ZMQ_MARKETDATA_REQ_PORT', 5560)}"
 
 
 # ── Option chain ──────────────────────────────────────────────────────────────
 
 async def get_option_chain_from_service(symbol: str) -> Optional[Dict]:
-    """Fetches option chain data for a given symbol from the Market Data Microservice."""
+    """Fetch option chain data for a given symbol from the Market Data Microservice via ZMQ."""
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{MARKET_DATA_SERVICE_URL}/option-chain/{symbol.upper()}")
-            response.raise_for_status()
-            data = response.json()
-            if data.get('success'):
-                return data.get('data')
-            logger.error(f"Market Data Service error for {symbol}: {data.get('error')}")
-            return None
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error fetching option chain for {symbol}: {e}")
-    except httpx.RequestError as e:
-        logger.error(f"Network error fetching option chain for {symbol}: {e}")
+        return await zmq_get_option_chain_from_service(symbol)
     except Exception as e:
         logger.error(f"Unexpected error fetching option chain for {symbol}: {e}", exc_info=True)
-    return None
+        return None
 
 
 # ── Spot details ──────────────────────────────────────────────────────────────
 
 async def get_spot_details_from_service(symbol: str) -> Optional[Dict]:
-    """Fetches spot details for a given symbol from the Market Data Microservice."""
+    """Fetch spot details for a given symbol from the Market Data Microservice via ZMQ."""
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{MARKET_DATA_SERVICE_URL}/spot-details/{symbol.upper()}")
-            response.raise_for_status()
-            data = response.json()
-            if data.get('success'):
-                return data.get('data')
-            logger.error(f"Market Data Service error for {symbol}: {data.get('error')}")
-            return None
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error fetching spot details for {symbol}: {e}")
-    except httpx.RequestError as e:
-        logger.error(f"Network error fetching spot details for {symbol}: {e}")
+        return await zmq_get_spot_details_from_service(symbol)
     except Exception as e:
         logger.error(f"Unexpected error fetching spot details for {symbol}: {e}", exc_info=True)
-    return None
+        return None
 
 
 # ── Single LTP ────────────────────────────────────────────────────────────────
 
 async def get_ltp_from_service(token: int) -> float:
-    """Fetches LTP for a given token from the Market Data Microservice."""
+    """Fetch LTP for a given token from the Market Data Microservice via ZMQ."""
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{MARKET_DATA_SERVICE_URL}/ltp/{token}")
-            response.raise_for_status()
-            data = response.json()
-            if data.get('success'):
-                return float(data.get('ltp', 0.0))
-            logger.warning(f"LTP error for token {token}: {data.get('error')}")
-            return 0.0
-    except httpx.RequestError as e:
-        logger.warning(f"Network error fetching LTP for {token}: {e}")
+        return await zmq_get_ltp_from_service(int(token))
     except Exception as e:
         logger.error(f"Unexpected error fetching LTP for {token}: {e}", exc_info=True)
-    return 0.0
+        return 0.0
 
 
 # ── Bulk LTP ──────────────────────────────────────────────────────────────────
 
 async def get_bulk_ltp_from_service(tokens: List[int]) -> Dict[int, float]:
-    """Fetches LTP for multiple tokens from the Market Data Microservice."""
+    """Fetch LTP for multiple tokens from the Market Data Microservice via ZMQ."""
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{MARKET_DATA_SERVICE_URL}/bulk-ltp",
-                json={"tokens": tokens}
-            )
-            response.raise_for_status()
-            data = response.json()
-            if data.get('success'):
-                return {int(k): float(v) for k, v in data.get('data', {}).items()}
-            logger.warning(f"Bulk LTP error: {data.get('error')}")
+        if not tokens:
             return {}
-    except httpx.RequestError as e:
-        logger.warning(f"Network error fetching bulk LTP: {e}")
+        return await zmq_get_bulk_ltp_from_service([int(t) for t in tokens])
     except Exception as e:
         logger.error(f"Unexpected error fetching bulk LTP: {e}", exc_info=True)
-    return {}
+        return {}
 
 
 # ── Market depth ──────────────────────────────────────────────────────────────
 
 async def get_market_depth_from_service(token: int) -> Optional[Dict]:
-    """Fetches market depth for a given token from the Market Data Microservice."""
+    """Fetch market depth for a given token via the bulk ZMQ endpoint for compatibility."""
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{MARKET_DATA_SERVICE_URL}/market-depth/{token}")
-            response.raise_for_status()
-            data = response.json()
-            if data.get('success'):
-                return data.get('data')
-            logger.warning(f"Market depth error for token {token}: {data.get('error')}")
-            return None
-    except httpx.RequestError as e:
-        logger.warning(f"Network error fetching market depth for {token}: {e}")
+        token_int = int(token)
+        instruments = [{
+            "exchangeInstrumentID": token_int,
+            "exchangeSegment": config.EXCHANGE_NSEFO
+        }]
+        depth_map = await zmq_get_bulk_market_depth_from_service(instruments)
+        return depth_map.get(token_int)
     except Exception as e:
         logger.error(f"Unexpected error fetching market depth for {token}: {e}", exc_info=True)
-    return None
+        return None
 
 
 async def get_bulk_market_depth_from_service(instruments: List[Dict]) -> Dict[int, Dict]:
-    """Fetches market depth for multiple tokens from the Market Data Microservice."""
+    """Fetch market depth for multiple tokens from the Market Data Microservice via ZMQ."""
+    if not instruments:
+        logger.warning("Bulk market depth request skipped: no instruments provided.")
+        return {}
+
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{MARKET_DATA_SERVICE_URL}/bulk-market-depth",
-                json={"instruments": instruments}
+        logger.info(
+            f"📤 [trading.data_client] bulk-depth request count={len(instruments)} "
+            f"sample={instruments[:3]}"
+        )
+
+        normalized_instruments = []
+        for item in instruments:
+            if not isinstance(item, dict):
+                continue
+
+            token = (
+                item.get("exchangeInstrumentID")
+                or item.get("ExchangeInstrumentID")
+                or item.get("token")
             )
-            response.raise_for_status()
-            data = response.json()
-            if data.get('success'):
-                return {int(k): v for k, v in data.get('data', {}).items()}
-            logger.warning(f"Bulk market depth error: {data.get('error')}")
+            segment = (
+                item.get("exchangeSegment")
+                or item.get("ExchangeSegment")
+                or item.get("segment")
+                or config.EXCHANGE_NSEFO
+            )
+
+            if token is None:
+                continue
+
+            normalized_instruments.append({
+                "exchangeInstrumentID": int(token),
+                "exchangeSegment": int(segment),
+            })
+
+        if not normalized_instruments:
+            logger.warning("Bulk market depth request normalized to 0 valid instruments.")
             return {}
-    except httpx.RequestError as e:
-        logger.warning(f"Network error fetching bulk market depth: {e}")
+
+        depth_map = await zmq_get_bulk_market_depth_from_service(normalized_instruments)
+
+        if depth_map:
+            first_key = next(iter(depth_map), None)
+            if first_key is not None:
+                logger.debug("first depth item token (hidden)")
+        else:
+            logger.warning(
+                f"Bulk market depth returned 0 items for {len(normalized_instruments)} instruments."
+            )
+
+        return depth_map
+
     except Exception as e:
         logger.error(f"Unexpected error fetching bulk market depth: {e}", exc_info=True)
-    return {}
+        return {}
 
 
 # ── Snapshot service ──────────────────────────────────────────────────────────
 
 async def get_snapshot_from_service(trade_uid: str) -> Optional[Dict]:
-    """Fetches the latest computed snapshot for a trade from snapshot_service."""
+    """Fetch the latest computed snapshot for a trade from snapshot_service over HTTP."""
     try:
         async with httpx.AsyncClient(timeout=1.0) as client:
             resp = await client.get(f"{SNAPSHOT_SERVICE_URL}/api/snapshots/{trade_uid}")
@@ -158,53 +162,17 @@ async def get_snapshot_from_service(trade_uid: str) -> Optional[Dict]:
 # ── Subscriptions ─────────────────────────────────────────────────────────────
 
 async def subscribe_active_straddles():
-    """Subscribes active straddle instruments by sending tokens to the Market Data Microservice."""
-    if not state.db:
-        logger.error("❌ Database not initialized for active straddle subscription.")
-        return
+    """Subscribe active straddle instruments via ZMQ."""
     try:
-        straddles = state.db.get_active_straddles()
-        if not straddles:
-            logger.info("ℹ️ No active straddles to subscribe.")
-            return
-
-        tokens_to_subscribe = set()
-        for straddle in straddles:
-            for key in ('ce_token', 'pe_token', 'fut_token'):
-                if straddle.get(key):
-                    tokens_to_subscribe.add(int(straddle[key]))
-
-        if not tokens_to_subscribe:
-            logger.info("No instruments found in active straddles to subscribe.")
-            return
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{MARKET_DATA_SERVICE_URL}/subscribe",
-                json={"tokens": list(tokens_to_subscribe)},
-                timeout=5.0
-            )
-            response.raise_for_status()
-            data = response.json()
-            if data.get('success'):
-                for token in tokens_to_subscribe:
-                    state.add_subscription(token)
-                logger.info(f"✅ Subscribed {len(tokens_to_subscribe)} instruments to Market Data Service.")
-            else:
-                logger.error(f"❌ Subscription failed: {data.get('error')}")
-
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error during straddle subscription: {e}")
-    except httpx.RequestError as e:
-        logger.error(f"Network error during straddle subscription: {e}")
+        await zmq_subscribe_active_straddles()
     except Exception as e:
-        logger.error(f"Unexpected error during straddle subscription: {e}", exc_info=True)
+        logger.error(f"Unexpected error during active straddle subscription: {e}", exc_info=True)
 
 
 # ── Price sync loop ───────────────────────────────────────────────────────────
 
 async def sync_prices_loop():
-    """Continuously fetches prices from the Market Data Microservice and updates local state."""
+    """Continuously fetch prices from the Market Data Microservice and update local state."""
     logger.info("🔄 Starting price sync loop with Market Data Microservice.")
     while True:
         try:
@@ -217,7 +185,7 @@ async def sync_prices_loop():
             prices_data = await get_bulk_ltp_from_service(subscribed_tokens)
             if prices_data:
                 for token, ltp in prices_data.items():
-                    state.update_price(token, float(ltp))
+                    state.update_price(int(token), float(ltp))
                 logger.debug(f"Synced {len(prices_data)} prices from Market Data Service.")
 
             await asyncio.sleep(1)
@@ -230,20 +198,27 @@ async def sync_prices_loop():
             await asyncio.sleep(5)
 
 
-# ── HTTP client lifecycle ─────────────────────────────────────────────────────
+# ── Client lifecycle ──────────────────────────────────────────────────────────
 
 _http_client: Optional[httpx.AsyncClient] = None
 
+
 def set_http_client_instance(host: str, port: int):
     """
-    Initializes the shared HTTP client pointed at the market data service.
-    Called once at startup by main.py after services are ready.
-    Also dynamically updates MARKET_DATA_SERVICE_URL to use the actual host.
+    Compatibility stub.
+
+    The market data service is ZMQ-based, not HTTP-based. We keep this function so
+    existing startup code does not break, but it only updates a diagnostic string.
     """
-    global _http_client, MARKET_DATA_SERVICE_URL
-    MARKET_DATA_SERVICE_URL = f"http://{host}:{port}"
-    _http_client = httpx.AsyncClient(
-        base_url=MARKET_DATA_SERVICE_URL,
-        timeout=2.0
-    )
+    global MARKET_DATA_SERVICE_URL, _http_client
+    MARKET_DATA_SERVICE_URL = f"zmq://{host}:{getattr(config, 'ZMQ_MARKETDATA_REQ_PORT', 5560)}"
+
+    if _http_client is not None:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_http_client.aclose())
+        except Exception:
+            pass
+        _http_client = None
+
     logger.info(f"✅ Trading data client initialized → {MARKET_DATA_SERVICE_URL}")

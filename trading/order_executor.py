@@ -13,9 +13,10 @@ from Connect import XTSConnect
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from models import state
-from utils.logger import logger
-from market_data import get_market_depth, get_bulk_market_depth
-
+from utils.logger import logger 
+from trading.data_client import get_bulk_market_depth_from_service
+from trading.chain_provider import get_market_depth
+from trading.chain_provider import _safe_float
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Exchange Segment Mappings
@@ -349,7 +350,13 @@ class OrderExecutor:
         the order is LEFT OPEN and a retry signal is returned instead of
         cancelling a perfectly valid resting order.
         Cancellation on depth failure only fires for OPEN/REPLACED (stale reprices).
+
+        NOTE:
+        Supports both normalized depth keys:
+        - new: bid / ask
+        - old: bid_price / ask_price
         """
+
         app_order_id     = pending_order_data.get('AppOrderID')
         original_uid     = pending_order_data.get('OrderUniqueIdentifier')
         token            = pending_order_data.get('ExchangeInstrumentID')
@@ -370,33 +377,51 @@ class OrderExecutor:
                 trade = await loop.run_in_executor(None, state.db.get_straddle_by_id, trade_uid)
                 if trade and 'config' in trade:
                     symbol = trade.get('symbol', '').upper()
-                    if "SENSEX" in symbol:
-                        buy_buffer = sell_buffer = 6.0
-                    buy_buffer  = float(trade['config'].get('buy_buffer', buy_buffer))
+                    # if "SENSEX" in symbol:
+                    #     buy_buffer = sell_buffer = 6.0
+                    buy_buffer = float(trade['config'].get('buy_buffer', buy_buffer))
                     sell_buffer = float(trade['config'].get('sell_buffer', sell_buffer))
 
-            depth = await get_market_depth(token, exchange_segment)
+            depth_map = await get_bulk_market_depth_from_service([
+                {
+                    "exchangeSegment": exchange_segment,
+                    "exchangeInstrumentID": int(token)
+                }
+            ])
 
-            if not (depth and depth.get('bid_price', 0) > 0 and depth.get('ask_price', 0) > 0):
-                # ── FIX: Depth unavailable ────────────────────────────────────────────────
+            if not depth_map:
+                logger.warning(f"No market depth returned for token {token}")
+                depth = None
+            else:
+                depth = depth_map.get(int(token))
+
+            bid_price = 0.0
+            ask_price = 0.0
+            if depth:
+                bid_price = float(depth.get('bid') or depth.get('bid_price') or 0.0)
+                ask_price = float(depth.get('ask') or depth.get('ask_price') or 0.0)
+
+            if not (depth and bid_price > 0 and ask_price > 0):
+                # ── FIX: Depth unavailable ───────────────────────────────────────
                 # For NEW orders: depth subscription may not be ready yet.
-                # DO NOT cancel — leave order open and let the next verification pass retry.
-                # Only cancel for OPEN/REPLACED (genuinely stale limit orders needing reprice).
-                # ─────────────────────────────────────────────────────────────────────────
+                # DO NOT cancel — leave order open and let the next verification
+                # pass retry.
+                # Only cancel for OPEN/REPLACED (genuinely stale limit orders
+                # needing reprice).
+                # ────────────────────────────────────────────────────────────────
                 if order_status == 'NEW':
                     logger.warning(
                         f"⚠️ No depth for token {token} on NEW order {app_order_id}. "
                         f"Leaving open — next verification pass will retry."
                     )
                     return {
-                        'success':      False,
-                        'status':       'DEPTH_UNAVAILABLE_RETRY',
-                        'order_id':     app_order_id,
+                        'success': False,
+                        'status': 'DEPTH_UNAVAILABLE_RETRY',
+                        'order_id': app_order_id,
                         'should_retry': True,
-                        'error':        'No depth data yet; order left open for re-verification.'
+                        'error': 'No depth data yet; order left open for re-verification.'
                     }
                 else:
-                    # OPEN / REPLACED — these need repricing, safe to cancel
                     logger.warning(
                         f"⚠️ Could not get market depth for token {token} "
                         f"on {order_status} order {app_order_id}. Attempting to CANCEL."
@@ -412,24 +437,27 @@ class OrderExecutor:
                     if cancel_response and cancel_response.get('type') == 'success':
                         logger.info(f"✅ Order {app_order_id} cancelled (failed depth fetch).")
                         return {
-                            'success':  False,
-                            'status':   'CANCELLED',
+                            'success': False,
+                            'status': 'CANCELLED',
                             'order_id': app_order_id,
-                            'error':    'Cancelled due to failed market depth fetch.'
+                            'error': 'Cancelled due to failed market depth fetch.'
                         }
                     else:
-                        error_msg = cancel_response.get('description', 'Cancellation failed') if cancel_response else 'No response'
+                        error_msg = (
+                            cancel_response.get('description', 'Cancellation failed')
+                            if cancel_response else 'No response'
+                        )
                         logger.error(f"❌ Failed to cancel order {app_order_id}: {error_msg}")
                         return {
-                            'success':  False,
-                            'status':   'CANCEL_FAILED',
+                            'success': False,
+                            'status': 'CANCEL_FAILED',
                             'order_id': app_order_id,
-                            'error':    error_msg
+                            'error': error_msg
                         }
 
-            tick_size          = self._get_instrument_tick_size(token, exchange_segment)
-            base_buffer_ticks  = 2
-            escalation_factor  = attempt_number + 2
+            tick_size = self._get_instrument_tick_size(token, exchange_segment)
+            base_buffer_ticks = 2
+            escalation_factor = attempt_number + 2
             chase_buffer_ticks = base_buffer_ticks * escalation_factor
 
             logger.info(
@@ -438,35 +466,38 @@ class OrderExecutor:
             )
 
             if order_side == self.xt_i.TRANSACTION_TYPE_BUY:
-                new_limit_price = depth['ask_price'] + (chase_buffer_ticks)
+                new_limit_price = ask_price + chase_buffer_ticks
             else:
-                new_limit_price = depth['bid_price'] - (chase_buffer_ticks)
+                new_limit_price = bid_price - chase_buffer_ticks
 
             if new_limit_price <= 0:
                 msg = f"Calculated chase price is not positive ({new_limit_price:.2f}). Aborting."
                 logger.error(f"❌ {msg}")
                 return {'success': False, 'error': msg}
 
-            final_price = round(new_limit_price , 2)
+            final_price = round(new_limit_price, 2)
 
             mod_params = {
-                'appOrderID':                app_order_id,
-                'modifiedProductType':       pending_order_data.get('ProductType'),
-                'modifiedOrderType':         self.xt_i.ORDER_TYPE_LIMIT,
-                'modifiedOrderQuantity':     pending_order_data.get('OrderQuantity'),
+                'appOrderID': app_order_id,
+                'modifiedProductType': pending_order_data.get('ProductType'),
+                'modifiedOrderType': self.xt_i.ORDER_TYPE_LIMIT,
+                'modifiedOrderQuantity': pending_order_data.get('OrderQuantity'),
                 'modifiedDisclosedQuantity': pending_order_data.get('OrderDisclosedQuantity'),
-                'modifiedLimitPrice':        final_price,
-                'modifiedStopPrice':         pending_order_data.get('OrderStopPrice'),
-                'modifiedTimeInForce':       pending_order_data.get('TimeInForce'),
-                'orderUniqueIdentifier':     original_uid,
-                'clientID':                  self.client_id
+                'modifiedLimitPrice': final_price,
+                'modifiedStopPrice': pending_order_data.get('OrderStopPrice'),
+                'modifiedTimeInForce': pending_order_data.get('TimeInForce'),
+                'orderUniqueIdentifier': original_uid,
+                'clientID': self.client_id
             }
 
             mod_func = functools.partial(self.xt_i.modify_order, **mod_params)
             response = await loop.run_in_executor(self.executor, mod_func)
 
             if response and response.get('type') == 'success':
-                logger.info(f"✅ Order {app_order_id} modified → ₹{final_price:.2f}")
+                logger.info(
+                    f"✅ Order {app_order_id} modified → ₹{final_price:.2f} "
+                    f"(Bid={bid_price:.2f}, Ask={ask_price:.2f})"
+                )
                 return {'success': True, 'order_id': app_order_id, 'response': response}
             else:
                 error_msg = response.get('description', 'Modification failed') if response else 'No response'
@@ -476,11 +507,6 @@ class OrderExecutor:
         except Exception as e:
             logger.error(f"❌ Exception while chasing order {app_order_id}: {e}", exc_info=True)
             return {'success': False, 'order_id': app_order_id, 'error': str(e)}
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Batch Execution
-    # ─────────────────────────────────────────────────────────────────────────
-
     async def execute_batch(
         self,
         orders: List[Dict],
@@ -495,9 +521,9 @@ class OrderExecutor:
         Verification must be done separately via verify_orders_bulk().
         """
         execution_start = time.time()
-        logger.info("=" * 100)
+        logger.debug("=" * 100)
         logger.info(f"⚡ {batch_name} | Total: {len(orders)} orders | Max Retries: {max_retries}")
-        logger.info("=" * 100)
+        logger.debug("=" * 100)
 
         all_successful_orders: List[Dict] = []
         final_failed_orders:   List[Dict] = []
@@ -532,7 +558,11 @@ class OrderExecutor:
                         'exchangeInstrumentID': int(o['token'])
                     })
 
-                depth_map = await get_bulk_market_depth(instruments_for_depth)
+                depth_map = await get_bulk_market_depth_from_service(instruments_for_depth)
+                # --- NEW: Log the full depth map received ---
+                if depth_map:
+                    logger.debug("Received market depth data (hidden from info logs)")
+                # --- END NEW ---
 
                 for order in orders_needing_price:
                     calc_price = 0.0
@@ -541,42 +571,61 @@ class OrderExecutor:
                     action     = order.get('action') or order.get('order_side', '')
 
                     depth = depth_map.get(int(order['token']))
-                    if depth and depth.get('bid_price', 0) > 0 and depth.get('ask_price', 0) > 0:
-                        bid_price = depth['bid_price']
-                        ask_price = depth['ask_price']
+                    if depth and (depth.get('bid_price') or 0) > 0 and (depth.get('ask_price') or 0) > 0:
+                        bid_price = float(depth.get('bid') or depth.get('bid_price') or 0.0)
+                        ask_price = float(depth.get('ask') or depth.get('ask_price') or 0.0)
                         if action.upper() == "BUY":
-                            calc_price = ask_price + (buffer )
+                            calc_price = ask_price + buffer
                         else:
-                            calc_price = bid_price - (buffer)
+                            calc_price = bid_price - buffer
                             if calc_price <= 0:
                                 calc_price = bid_price
+                        # --- NEW: Detailed logging for price calculation ---
                         logger.info(
-                            f"✅ Price [{order['uid']}] {action} | "
-                            f"Bid={bid_price:.2f} Ask={ask_price:.2f} "
-                            f"Buffer={buffer} → {calc_price:.2f}"
+                            f"✅ Price Calc [{order['uid']}] {action}:\n"
+                            f"   - Bid/Ask:          ₹{bid_price:.2f} / ₹{ask_price:.2f}\n"
+                            f"   - Buffer:           {buffer}\n"
+                            f"   - Formula:          {'Ask' if action.upper() == 'BUY' else 'Bid'} {'+' if action.upper() == 'BUY' else '-'} Buffer\n"
+                            f"   - Calculated Price: ₹{calc_price:.2f}"
                         )
+                        # --- END NEW ---
                     else:
                         logger.warning(
                             f"⚠️ Depth failed for token {order['token']}. "
                             f"Falling back to expected_price for [{order['uid']}]."
                         )
                         expected_price = order.get('expected_price', 0.0)
-                        if expected_price > 0:
+                        if _safe_float(expected_price) > 0:
                             if action.upper() == "BUY":
-                                calc_price = expected_price + (buffer )
+                                calc_price = expected_price + buffer
                             else:
-                                calc_price = expected_price - (buffer)
+                                calc_price = expected_price - buffer
                                 if calc_price <= 0:
                                     calc_price = buffer
+                            # --- NEW: Detailed logging for fallback price calculation ---
                             logger.info(
-                                f"✅ Fallback price [{order['uid']}] | "
-                                f"Expected={expected_price:.2f} → {calc_price:.2f}"
+                                f"✅ Fallback Price Calc [{order['uid']}] {action}:\n"
+                                f"   - Source:           Expected Price (LTP)\n"
+                                f"   - Expected Price:   ₹{expected_price:.2f}\n"
+                                f"   - Calculated Price: ₹{calc_price:.2f}"
                             )
+                            # --- END NEW ---
                         else:
-                            logger.error(
-                                f"❌ No depth and no expected_price for token {order['token']} "
-                                f"[{order['uid']}]. Order will fail."
+                            # --- FIX: Corrected the logger call and message ---
+                            logger.warning(
+                                f"⚠️ No depth and no expected_price for token {order['token']}. "
+                                f"Attempting final LTP fetch for [{order['uid']}]."
                             )
+                            from trading.data_client import get_ltp_from_service
+                            final_ltp = await get_ltp_from_service(order['token'])
+                            if final_ltp > 0:
+                                calc_price = final_ltp + buffer if action.upper() == "BUY" else final_ltp - buffer
+                                logger.info(f"✅ Final LTP fallback successful for [{order['uid']}]. Using price: {calc_price:.2f}")
+                            else:
+                                logger.error(
+                                    f"❌ All price fallbacks failed for token {order['token']} [{order['uid']}]. Order will fail."
+                                )
+                            # --- END FIX ---
 
                     if calc_price > 0:
                         rounded = calc_price
@@ -661,7 +710,7 @@ class OrderExecutor:
                 if data['fill_prices'] else 0.0
             )
 
-        logger.info("=" * 100)
+        logger.debug("=" * 100)
         logger.info(f"✅ {batch_name} FINAL | Time: {execution_time:.2f}s")
         logger.info(
             f"✅ Success: {len(all_successful_orders)}/{len(orders)} | "
@@ -669,7 +718,7 @@ class OrderExecutor:
         )
         for key, data in stats.items():
             logger.info(f"   {key}: {data['quantity']} @ ₹{data['avg_fill_price']:.2f}")
-        logger.info("=" * 100)
+        logger.debug("=" * 100)
 
         return {
             'success':           len(final_failed_orders) == 0,
@@ -745,7 +794,8 @@ class OrderExecutor:
 
             # ── CHANGE 1: counters for NEW sighting tracking ──────────────────
             new_sighting_count: Dict[str, int] = {}
-            MAX_NEW_WAIT_CYCLES = 1  # 1 free pass, then cancel+reexec on 2nd sighting
+            MAX_NEW_WAIT_CYCLES = 3  # 1 free pass, then cancel+reexec on 2nd sighting
+            last_known_state = {}
             # ─────────────────────────────────────────────────────────────────
 
             while pending_ids and (time.time() - start_time < timeout):
@@ -758,6 +808,9 @@ class OrderExecutor:
                 still_pending = set()
 
                 for order_id in list(pending_ids):
+                    if order_id in order_map:
+                        last_known_state[order_id] = order_map[order_id]
+                        
                     if order_id not in order_map:
                         # Not in order book yet — propagation lag, keep waiting
                         still_pending.add(order_id)
@@ -789,13 +842,26 @@ class OrderExecutor:
                         pending_ids.remove(order_id)
 
                     elif status in TERMINAL_FAIL_STATUSES:
-                        reason = broker_order.get('OrderRejectionReason', 'Unknown')
-                        logger.error(f"❌ [{batch_name}] {status}: {order_id} - {reason}")
-                        verified_failed.append({
-                            'order_id': order_id, 'status': status,
-                            'order_type': order_type_label, 'reason': reason,
-                            'exchange_segment': exchange_seg
-                        })
+                        if filled_qty > 0:
+                            logger.info(f"✅ [{batch_name}] TERMINAL-PARTIAL: {order_id} @ ₹{avg_price:.2f} with Qty {filled_qty}")
+                            verified_success.append({
+                                'order_id': order_id, 'status': status,
+                                'option_type': option_type, 'action': order_side,
+                                'order_type': order_type_label, 'order_side': order_side,
+                                'filled_qty': filled_qty, 'quantity': filled_qty,
+                                'order_qty': order_qty, 'avg_price': avg_price,
+                                'fill_price': avg_price, 'exchange_segment': exchange_seg,
+                                'exchange_name': exchange_name, 'trading_symbol': trading_symbol,
+                                **broker_order
+                            })
+                        else:
+                            reason = broker_order.get('OrderRejectionReason', 'Unknown')
+                            logger.error(f"❌ [{batch_name}] {status}: {order_id} - {reason}")
+                            verified_failed.append({
+                                'order_id': order_id, 'status': status,
+                                'order_type': order_type_label, 'reason': reason,
+                                'exchange_segment': exchange_seg
+                            })
                         pending_ids.remove(order_id)
 
                     elif status in WAIT_FOR_FILL_STATUSES:  # NEW
@@ -931,10 +997,39 @@ class OrderExecutor:
 
             # Handle timeouts
             for oid in pending_ids:
-                logger.warning(f"⚠️ [{batch_name}] Verification timed out for {oid}")
-                verified_failed.append({
-                    'order_id': oid, 'status': 'TIMEOUT', 'reason': 'Verification timed out'
-                })
+                logger.warning(f"⚠️ [{batch_name}] Verification timed out for {oid}. Sending safety cancel.")
+                last_order = last_known_state.get(oid, {})
+                original_uid = last_order.get('OrderUniqueIdentifier')
+                
+                if original_uid:
+                    try:
+                        cancel_func = functools.partial(
+                            self.xt_i.cancel_order,
+                            appOrderID=oid,
+                            orderUniqueIdentifier=original_uid,
+                            clientID=self.client_id
+                        )
+                        await loop.run_in_executor(self.executor, cancel_func)
+                    except Exception as e:
+                        logger.error(f"❌ Failed to cancel timed out order {oid}: {e}")
+                        
+                filled_qty = int(last_order.get('CumulativeQuantity', 0) or 0)
+                if filled_qty > 0:
+                    avg_price = float(last_order.get('OrderAverageTradedPrice', 0) or 0)
+                    logger.info(f"✅ [{batch_name}] TIMEOUT-PARTIAL: {oid} @ ₹{avg_price:.2f} with Qty {filled_qty}")
+                    verified_success.append({
+                        'order_id': oid, 'status': 'TIMEOUT_PARTIAL',
+                        'option_type': last_order.get('TradingSymbol', '')[-2:], 'action': last_order.get('OrderSide', ''),
+                        'filled_qty': filled_qty, 'quantity': filled_qty,
+                        'order_qty': int(last_order.get('OrderQuantity', 0) or 0),
+                        'avg_price': avg_price, 'fill_price': avg_price,
+                        'exchange_segment': last_order.get('ExchangeSegment', 0),
+                        **last_order
+                    })
+                else:
+                    verified_failed.append({
+                        'order_id': oid, 'status': 'TIMEOUT', 'reason': 'Verification timed out'
+                    })
 
         except Exception as e:
             import traceback

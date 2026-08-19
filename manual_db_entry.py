@@ -7,7 +7,7 @@ from Connect import XTSConnect
 from database.db_manager import Database
 
 async def recover_specific_orders():
-    trade_uid = "sx130526095600a"
+    trade_uid = "ny090726095000e"
     
     # The exact OrderUniqueIdentifiers from your broker logs
     target_ouis = [

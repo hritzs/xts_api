@@ -17,8 +17,8 @@ from trading.data_client import get_option_chain_from_service
 
 
 async def hedge_position(
-    trade_uid: str,  # Same UID as build
-    hedge_orders: List[Dict], # This will now be a single chunk of orders
+    trade_uid: str,
+    hedge_orders: List[Dict],
     hedge_type: str = "DELTA"
 ) -> Optional[Dict]:
     """
@@ -32,8 +32,8 @@ async def hedge_position(
     Returns:
         Hedge result from OrderExecutor
     """
-    if not hasattr(state, 'temp_order_cache'):
-        state.temp_order_cache = {}
+    if not hasattr(state, 'trade_fill_cache') or state.trade_fill_cache is None:
+        state.trade_fill_cache = {}
 
     try:
         executor = get_order_executor()
@@ -41,16 +41,14 @@ async def hedge_position(
             logger.error("❌ OrderExecutor not initialized")
             return None
 
-        logger.info("=" * 100)
+        logger.debug("=" * 100)
         logger.info(f"🛡️  HEDGE {hedge_type} | Trade UID: {trade_uid}")
-        logger.info("=" * 100)
+        logger.debug("=" * 100)
 
-        # --- NEW: Re-execution and verification loop, similar to square_off ---
         orders_to_process_in_batch = list(hedge_orders)
-        max_execution_retries = 2  # Total 3 attempts (0, 1, 2)
+        max_execution_retries = 2
         execution_attempt = 0
-        
-        # Preserve base buffer for scaling
+
         for order in orders_to_process_in_batch:
             if 'base_buffer' not in order:
                 order['base_buffer'] = order.get('limit_order_buffer', 2.0)
@@ -59,69 +57,71 @@ async def hedge_position(
         all_successful_placements_for_batch = []
         all_failed_placements_for_batch = []
         all_verification_failures = []
-        
+        unverified_order_ids = []
+
         while orders_to_process_in_batch and execution_attempt <= max_execution_retries:
             if execution_attempt > 0:
                 multiplier = execution_attempt + 1
-                logger.info(f"🔄 Re-executing {len(orders_to_process_in_batch)} orders for HEDGE {hedge_type} (Attempt {execution_attempt + 1}) | buffer={multiplier}x...")
+                logger.info(
+                    f"🔄 Re-executing {len(orders_to_process_in_batch)} orders for HEDGE "
+                    f"{hedge_type} (Attempt {execution_attempt + 1}) | buffer={multiplier}x..."
+                )
                 await asyncio.sleep(0.5)
 
-                # Scale buffer: base * multiplier (2->4->6)
                 for order in orders_to_process_in_batch:
                     base = order.get('base_buffer', 2.0)
                     order['limit_order_buffer'] = base * multiplier
-                    order['limit_price'] = 0.0 # Force recalculation
-                    logger.info(f"   -> For UID {order['uid']}, new buffer is {order['limit_order_buffer']:.1f}")
+                    order['limit_price'] = 0.0
+                    logger.info(
+                        f"   -> For UID {order['uid']}, new buffer is "
+                        f"{order['limit_order_buffer']:.1f}"
+                    )
 
-            # Execute the current set of orders
             result = await executor.execute_batch(
-                orders_to_process_in_batch, 
-                f"HEDGE_{hedge_type}_{trade_uid}_EXEC{execution_attempt+1}"
+                orders_to_process_in_batch,
+                f"HEDGE_{hedge_type}_{trade_uid}_EXEC{execution_attempt + 1}"
             )
-            
+
             successful_placements = result.get('successful_orders', [])
             all_successful_placements_for_batch.extend(successful_placements)
             all_failed_placements_for_batch.extend(result.get('failed_orders', []))
 
-            # --- FIX: Persist placed hedge orders immediately to prevent DB parity issues ---
             if successful_placements:
-                for ord_data in successful_placements:
-                    try:
-                        db_order = {
-                            'AppOrderID': str(ord_data.get('app_order_id')),
-                            'OrderUniqueIdentifier': ord_data.get('uid'),
-                            'order_unique_id': ord_data.get('uid'),
-                            'ExchangeInstrumentID': ord_data.get('token'),
-                            'OrderSide': ord_data.get('action'),
-                            'OrderQuantity': ord_data.get('quantity'),
-                            'LeavesQuantity': ord_data.get('quantity'),
-                            'CumulativeQuantity': 0,
-                            'OrderStatus': 'OPEN',
-                            'ProductType': ord_data.get('product_type', 'MIS'),
-                            'trade_uid': trade_uid
-                        }
-                        await asyncio.get_event_loop().run_in_executor(None, state.db.insert_order, db_order)
-                    except Exception as ins_e:
-                        logger.error(f"⚠️ Failed to persist placed hedge order {ord_data.get('app_order_id')}: {ins_e}")
+                # --- FIX: Corrected list comprehension syntax ---
+                placed_order_ids = [
+                    str(o.get('order_id') or o.get('app_order_id'))
+                    for o in successful_placements
+                    if o.get('order_id') or o.get('app_order_id')
+                ]
             # --- END FIX ---
-
-            # Verification part
-            placed_order_ids = [str(o.get('order_id') or o.get('app_order_id')) for o in successful_placements if o.get('order_id') or o.get('app_order_id')]
-            app_order_id_to_uid_map = {str(o.get('app_order_id')): o.get('uid') for o in successful_placements}
+            app_order_id_to_uid_map = {
+                str(o.get('app_order_id')): o.get('uid')
+                for o in successful_placements
+            }
 
             verified_fills_for_attempt = []
             unverified_order_ids = list(placed_order_ids)
-            max_verification_attempts = 2 # As requested
+            max_verification_attempts = 2
             orders_to_reexecute = []
+            newly_failed = []
+            terminal_failure_statuses = {
+                'REJECTED', 'CANCELLED', 'CANCELED',
+                'NOT_FOUND_ON_RETRY', 'CANCEL_FAILED', 'MODIFY_FAILED'
+            }
 
             for v_attempt in range(max_verification_attempts):
                 if not unverified_order_ids:
                     break
 
-                logger.info(f"📊 Verifying HEDGE batch, execution {execution_attempt+1}, verification {v_attempt + 1}/{max_verification_attempts} for {len(unverified_order_ids)} orders...")
+                logger.info(
+                    f"📊 Verifying HEDGE batch, execution {execution_attempt + 1}, "
+                    f"verification {v_attempt + 1}/{max_verification_attempts} for "
+                    f"{len(unverified_order_ids)} orders..."
+                )
+
                 verification_result = await executor.verify_orders_bulk(
                     unverified_order_ids,
-                    f"HEDGE_{hedge_type}_{trade_uid}_VERIFY{execution_attempt+1}.{v_attempt+1}",
+                    f"HEDGE_{hedge_type}_{trade_uid}_VERIFY{execution_attempt + 1}.{v_attempt + 1}",
                     trade_uid=trade_uid
                 )
 
@@ -130,121 +130,452 @@ async def hedge_position(
                     newly_failed = verification_result.get('verified_failed', [])
                     verified_fills_for_attempt.extend(newly_verified)
 
-                    verified_ids = {str(o.get('AppOrderID') or o.get('app_order_id') or o.get('apporderid')) for o in newly_verified}
-                    reexecute_ids = {str(o.get('order_id')) for o in newly_failed if o.get('status') == 'REEXECUTE_NEEDED'}
-                    terminal_failure_statuses = {'REJECTED', 'CANCELLED', 'CANCELED', 'NOT_FOUND_ON_RETRY', 'CANCEL_FAILED', 'MODIFY_FAILED'}
-                    failed_ids = {str(o.get('order_id')) for o in newly_failed if o.get('status') in terminal_failure_statuses}
+                    verified_ids = {
+                        str(o.get('AppOrderID') or o.get('app_order_id') or o.get('apporderid'))
+                        for o in newly_verified
+                    }
+                    reexecute_ids = {
+                        str(o.get('order_id'))
+                        for o in newly_failed
+                        if o.get('status') == 'REEXECUTE_NEEDED'
+                    }
+                    failed_ids = {
+                        str(o.get('order_id'))
+                        for o in newly_failed
+                        if o.get('status') in terminal_failure_statuses
+                    }
                     resolved_ids = verified_ids.union(failed_ids).union(reexecute_ids)
 
-                    unverified_order_ids = [oid for oid in unverified_order_ids if oid not in resolved_ids]
+                    unverified_order_ids = [
+                        oid for oid in unverified_order_ids if oid not in resolved_ids
+                    ]
 
                 if unverified_order_ids:
                     try:
-                        db_orders = await asyncio.get_event_loop().run_in_executor(None, state.db.get_orders_by_trade_id, trade_uid)
-                        db_order_map = {str(o.get('AppOrderID') or o.get('app_order_id') or o.get('apporderid')): o for o in db_orders}
-                        
+                        db_orders = await asyncio.get_event_loop().run_in_executor(
+                            None, state.db.get_orders_by_trade_id, trade_uid
+                        )
+                        db_order_map = {
+                            str(
+                                o.get('AppOrderID')
+                                or o.get('app_order_id')
+                                or o.get('apporderid')
+                            ): o
+                            for o in db_orders
+                        }
+
                         still_unverified = []
                         for oid in unverified_order_ids:
                             db_order = db_order_map.get(str(oid))
                             if db_order:
-                                status = str(db_order.get('order_status', '')).upper()
+                                status = str(
+                                    db_order.get('order_status')
+                                    or db_order.get('OrderStatus')
+                                    or ''
+                                ).upper()
                                 if status in ['FILLED', 'COMPLETE', 'TRADED', 'EXECUTED']:
                                     logger.info(f"✅ Found hedge order {oid} as {status} in DB.")
                                     fill = {
                                         'AppOrderID': oid,
-                                        'OrderUniqueIdentifier': db_order.get('order_unique_id'),
-                                        'ExchangeInstrumentID': db_order.get('exchange_instrument_id'),
-                                        'CumulativeQuantity': db_order.get('cumulative_quantity'),
-                                        'OrderAverageTradedPrice': db_order.get('order_avg_price'),
-                                        'OrderSide': db_order.get('order_side'),
-                                        'OrderStatus': status
+                                        'OrderUniqueIdentifier': db_order.get('order_unique_id') or db_order.get('OrderUniqueIdentifier'),
+                                        'order_unique_id': db_order.get('order_unique_id') or db_order.get('OrderUniqueIdentifier'),
+                                        'ExchangeInstrumentID': db_order.get('exchange_instrument_id') or db_order.get('ExchangeInstrumentID'),
+                                        'CumulativeQuantity': db_order.get('cumulative_quantity') or db_order.get('CumulativeQuantity'),
+                                        'OrderAverageTradedPrice': db_order.get('order_avg_price') or db_order.get('OrderAverageTradedPrice'),
+                                        'OrderSide': db_order.get('order_side') or db_order.get('OrderSide'),
+                                        'OrderStatus': status,
                                     }
                                     verified_fills_for_attempt.append(fill)
                                 else:
                                     still_unverified.append(oid)
                             else:
                                 still_unverified.append(oid)
+
                         unverified_order_ids = still_unverified
                     except Exception as e:
                         logger.error(f"❌ Hedge DB check error: {e}")
 
                     if unverified_order_ids:
-                        logger.warning(f"⚠️ {len(unverified_order_ids)} orders still pending in HEDGE batch. Retrying verification in 3.0s...")
+                        logger.warning(
+                            f"⚠️ {len(unverified_order_ids)} orders still pending in HEDGE batch. "
+                            f"Retrying verification in 3.0s..."
+                        )
                         await asyncio.sleep(3.0)
 
-            # After verification attempts, find orders to re-execute
-            if 'newly_failed' in locals():
-                for failed_order_info in newly_failed:
-                    if failed_order_info.get('status') == 'REEXECUTE_NEEDED':
-                        order_id = str(failed_order_info.get('order_id'))
-                        original_order_uid = app_order_id_to_uid_map.get(order_id)
-                        if original_order_uid:
-                            original_order_data = next((o for o in orders_to_process_in_batch if o.get('uid') == original_order_uid), None)
-                            if original_order_data:
-                                order_for_re_execution = original_order_data.copy()
-                                order_for_re_execution['limit_price'] = 0.0 # Force price recalculation
-                                # Regenerate UID to avoid broker rejection, preserving original prefix
-                                old_uid = original_order_data.get('uid', '')
-                                # Suffix timestamp to make unique
-                                new_uid = f"{old_uid.split('_TRY')[0]}_TRY{execution_attempt}_{int(time.time()*1000)%10000}"
-                                order_for_re_execution['uid'] = new_uid
-                                orders_to_reexecute.append(order_for_re_execution)
-                                logger.info(f"🔄 Order {original_order_uid} marked for re-execution with new UID {new_uid}.")
-                    
-                    if failed_order_info.get('status') in terminal_failure_statuses:
-                        all_verification_failures.append(failed_order_info)
+            for failed_order_info in newly_failed:
+                if failed_order_info.get('status') == 'REEXECUTE_NEEDED':
+                    order_id = str(failed_order_info.get('order_id'))
+                    original_order_uid = app_order_id_to_uid_map.get(order_id)
+                    if original_order_uid:
+                        original_order_data = next(
+                            (o for o in orders_to_process_in_batch if o.get('uid') == original_order_uid),
+                            None
+                        )
+                        if original_order_data:
+                            order_for_re_execution = original_order_data.copy()
+                            order_for_re_execution['limit_price'] = 0.0
+                            old_uid = original_order_data.get('uid', '')
+                            if old_uid and old_uid[0].isalpha():
+                                next_char = chr(ord(old_uid[0]) + 1)
+                                if next_char > 'Z' and old_uid[0].isupper():
+                                    next_char = 'A'
+                                if next_char > 'z' and old_uid[0].islower():
+                                    next_char = 'a'
+                                new_uid = f"{next_char}{old_uid[1:]}"
+                            else:
+                                new_uid = f"{old_uid}R"[:20]
+                            order_for_re_execution['uid'] = new_uid
+                            orders_to_reexecute.append(order_for_re_execution)
+                            logger.info(
+                                f"🔄 Order {original_order_uid} marked for re-execution with new UID {new_uid}."
+                            )
+
+                if failed_order_info.get('status') in terminal_failure_statuses:
+                    all_verification_failures.append(failed_order_info)
 
             all_verified_fills_for_batch.extend(verified_fills_for_attempt)
-
-            # Prepare for next execution attempt
             orders_to_process_in_batch = orders_to_reexecute
             execution_attempt += 1
 
         if unverified_order_ids:
-            logger.critical(f"❌ FAILED to verify {len(unverified_order_ids)} orders in HEDGE batch '{hedge_type}' after all retries.")
+            logger.critical(
+                f"❌ FAILED to verify {len(unverified_order_ids)} orders in HEDGE batch "
+                f"'{hedge_type}' after all retries."
+            )
 
         fills_to_process = all_verified_fills_for_batch
         if not fills_to_process and hedge_orders:
-            logger.warning(f"⚠️ Verification for HEDGE {trade_uid} returned no fills. Orders will not be saved to DB for this operation.")
+            logger.warning(
+                f"⚠️ Verification for HEDGE {trade_uid} returned no fills. "
+                f"Orders will not be saved to DB for this operation."
+            )
 
         if fills_to_process:
-            state.temp_order_cache.setdefault(trade_uid, []).extend(fills_to_process)
-            logger.info(f"Cached {len(fills_to_process)} hedge orders under key '{trade_uid}'.")
 
-            if hasattr(state.db, 'insert_order'):
-                app_order_id_to_uid_map = {str(o.get('app_order_id')): o.get('uid') for o in all_successful_placements_for_batch}
-                orders_inserted_count = 0
+            state.trade_fill_cache.setdefault(
+                trade_uid,
+                []
+            ).extend(
+                fills_to_process
+            )
+
+            logger.info(
+                f"Cached {len(fills_to_process)} "
+                f"hedge orders under key '{trade_uid}'."
+            )
+
+            # ====================================================
+            # VERIFIED HEDGE FILLS -> DATABASE
+            # ====================================================
+
+            orders_inserted_count = 0
+
+            if hasattr(
+                state.db,
+                "insert_order"
+            ):
+
+                # Map AppOrderID to original placement metadata.
+                original_order_map = {}
+
+                for _order in (
+                    all_successful_placements_for_batch
+                ):
+
+                    _app_id = (
+                        _order.get("app_order_id")
+                        or _order.get("order_id")
+                        or _order.get("AppOrderID")
+                    )
+
+                    if _app_id:
+                        original_order_map[
+                            str(_app_id)
+                        ] = _order
+
                 for fill_data in fills_to_process:
-                    app_order_id = str(fill_data.get('AppOrderID') or fill_data.get('app_order_id') or fill_data.get('apporderid'))
-                    # Always prefer the full local UID over the potentially truncated broker UID
-                    if app_order_id in app_order_id_to_uid_map:
-                        fill_data['OrderUniqueIdentifier'] = app_order_id_to_uid_map[app_order_id]
-                    
-                    if fill_data.get('OrderUniqueIdentifier'):
-                        # --- FIX: Map OrderUniqueIdentifier to order_unique_id for DB ---
-                        if 'order_unique_id' not in fill_data:
-                            fill_data['order_unique_id'] = fill_data.get('OrderUniqueIdentifier')
-                        
-                        state.db.insert_order(fill_data)
-                        orders_inserted_count += 1
-                del state.temp_order_cache[trade_uid]
-                logger.info(f"✅ Inserted {orders_inserted_count} verified hedge orders into DB.")
 
-        # --- DEBUG LOGGING to investigate success criteria ---
-        success_flag = (len(all_failed_placements_for_batch) == 0 and 
-                        len(unverified_order_ids) == 0 and 
-                        len(all_verification_failures) == 0)
+                    try:
+
+                        app_order_id = str(
+                            fill_data.get(
+                                "AppOrderID"
+                            )
+                            or fill_data.get(
+                                "app_order_id"
+                            )
+                            or fill_data.get(
+                                "apporderid"
+                            )
+                            or fill_data.get(
+                                "order_id"
+                            )
+                            or ""
+                        )
+
+                        src = original_order_map.get(
+                            app_order_id,
+                            {}
+                        )
+
+                        uid = (
+                            fill_data.get(
+                                "OrderUniqueIdentifier"
+                            )
+                            or fill_data.get(
+                                "order_unique_id"
+                            )
+                            or src.get(
+                                "uid"
+                            )
+                            or src.get(
+                                "OrderUniqueIdentifier"
+                            )
+                            or src.get(
+                                "order_unique_id"
+                            )
+                        )
+
+                        if not uid:
+
+                            logger.warning(
+                                f"⚠️ Hedge fill has no UID | "
+                                f"Trade={trade_uid} | "
+                                f"AppOrderID={app_order_id}"
+                            )
+
+                            continue
+
+                        # ------------------------------------------------
+                        # DB identity
+                        # ------------------------------------------------
+
+                        fill_data[
+                            "OrderUniqueIdentifier"
+                        ] = uid
+
+                        fill_data[
+                            "order_unique_id"
+                        ] = uid
+
+                        fill_data[
+                            "trade_uid"
+                        ] = trade_uid
+
+                        # ------------------------------------------------
+                        # Instrument
+                        # ------------------------------------------------
+
+                        token = (
+                            fill_data.get(
+                                "ExchangeInstrumentID"
+                            )
+                            or fill_data.get(
+                                "exchange_instrument_id"
+                            )
+                            or src.get(
+                                "token"
+                            )
+                        )
+
+                        fill_data[
+                            "ExchangeInstrumentID"
+                        ] = token
+
+                        fill_data[
+                            "exchange_instrument_id"
+                        ] = token
+
+                        # ------------------------------------------------
+                        # Exchange
+                        # ------------------------------------------------
+
+                        segment = (
+                            fill_data.get(
+                                "ExchangeSegment"
+                            )
+                            or fill_data.get(
+                                "exchange_segment"
+                            )
+                            or src.get(
+                                "exchange_segment"
+                            )
+                        )
+
+                        fill_data[
+                            "ExchangeSegment"
+                        ] = segment
+
+                        fill_data[
+                            "exchange_segment"
+                        ] = segment
+
+                        # ------------------------------------------------
+                        # Side
+                        # ------------------------------------------------
+
+                        side = (
+                            fill_data.get(
+                                "OrderSide"
+                            )
+                            or fill_data.get(
+                                "order_side"
+                            )
+                            or src.get(
+                                "action"
+                            )
+                        )
+
+                        fill_data[
+                            "OrderSide"
+                        ] = side
+
+                        fill_data[
+                            "order_side"
+                        ] = side
+
+                        # ------------------------------------------------
+                        # Quantity
+                        # ------------------------------------------------
+
+                        qty = (
+                            fill_data.get(
+                                "CumulativeQuantity"
+                            )
+                            or fill_data.get(
+                                "filled_qty"
+                            )
+                            or fill_data.get(
+                                "quantity"
+                            )
+                            or src.get(
+                                "quantity"
+                            )
+                            or 0
+                        )
+
+                        fill_data[
+                            "CumulativeQuantity"
+                        ] = qty
+
+                        fill_data[
+                            "OrderQuantity"
+                        ] = (
+                            fill_data.get(
+                                "OrderQuantity"
+                            )
+                            or qty
+                        )
+
+                        fill_data[
+                            "quantity"
+                        ] = (
+                            fill_data.get(
+                                "quantity"
+                            )
+                            or qty
+                        )
+
+                        # ------------------------------------------------
+                        # Product
+                        # ------------------------------------------------
+
+                        product = (
+                            fill_data.get(
+                                "ProductType"
+                            )
+                            or fill_data.get(
+                                "product_type"
+                            )
+                            or src.get(
+                                "product_type"
+                            )
+                            or "MIS"
+                        )
+
+                        fill_data[
+                            "ProductType"
+                        ] = product
+
+                        fill_data[
+                            "product_type"
+                        ] = product
+
+                        # ------------------------------------------------
+                        # Verified status
+                        # ------------------------------------------------
+
+                        fill_data[
+                            "OrderStatus"
+                        ] = "FILLED"
+
+                        fill_data[
+                            "order_status"
+                        ] = "FILLED"
+
+                        # ------------------------------------------------
+                        # Persist into DB
+                        # ------------------------------------------------
+
+                        state.db.insert_order(
+                            fill_data
+                        )
+
+                        orders_inserted_count += 1
+
+                        logger.info(
+                            f"💾 HEDGE FILL PERSISTED | "
+                            f"Trade={trade_uid} | "
+                            f"AppOrderID={app_order_id} | "
+                            f"Token={token} | "
+                            f"Side={side} | "
+                            f"Qty={qty}"
+                        )
+
+                    except Exception as insert_err:
+
+                        logger.exception(
+                            f"❌ HEDGE DB INSERT FAILED | "
+                            f"Trade={trade_uid} | "
+                            f"AppOrderID={app_order_id} | "
+                            f"Error={insert_err}"
+                        )
+
+                logger.info(
+                    f"✅ HEDGE DB PERSIST COMPLETE | "
+                    f"Trade={trade_uid} | "
+                    f"Inserted={orders_inserted_count} | "
+                    f"Verified={len(fills_to_process)}"
+                )
+
+            else:
+
+                logger.error(
+                    f"❌ state.db.insert_order() unavailable | "
+                    f"Trade={trade_uid}"
+                )
+
+        success_flag = (
+            len(all_failed_placements_for_batch) == 0 and
+            len(unverified_order_ids) == 0 and
+            len(all_verification_failures) == 0
+        )
         logger.info(
-            f"Hedge position debug: success={success_flag}, failed_placements={len(all_failed_placements_for_batch)}, "
-            f"unverified={len(unverified_order_ids)}, verification_failures={len(all_verification_failures)}"
+            f"Hedge position debug: success={success_flag}, "
+            f"failed_placements={len(all_failed_placements_for_batch)}, "
+            f"unverified={len(unverified_order_ids)}, "
+            f"verification_failures={len(all_verification_failures)}"
         )
 
-        # Return aggregated results including verification
         return {
-            "successful_orders": fills_to_process, # Return the verified fills
+            "successful_orders": fills_to_process,
             "failed_orders": all_failed_placements_for_batch,
             "successful_count": len(fills_to_process),
-            "failed_count": len(all_failed_placements_for_batch) + len(unverified_order_ids) + len(all_verification_failures),
+            "failed_count": (
+                len(all_failed_placements_for_batch)
+                + len(unverified_order_ids)
+                + len(all_verification_failures)
+            ),
             "total_orders": len(hedge_orders),
             "execution_time": result.get('execution_time', 0.0) if 'result' in locals() else 0.0,
             "success": success_flag
@@ -253,7 +584,6 @@ async def hedge_position(
     except Exception as e:
         logger.error(f"❌ Hedge failed: {e}", exc_info=True)
         return None
-
 
 
 async def execute_synthetic_hedge(
@@ -265,6 +595,9 @@ async def execute_synthetic_hedge(
     uid_prefix_override: Optional[str] = None # NEW
 ) -> Dict:
     try:
+        executor = get_order_executor()
+        if not executor:
+            raise RuntimeError("OrderExecutor not available for hedging.")
         """
         ⚡ ULTRA-FAST synthetic future hedge for delta neutralization.
         Executes in two 50% batches with verification in between.
@@ -318,8 +651,9 @@ async def execute_synthetic_hedge(
         # --- RESILIENCY: If lot_size from DB is invalid, fetch it fresh ---
         if lot_size <= 0:
             logger.warning(f"⚠️ Invalid lot_size={lot_size} from DB for {trade_uid}. Attempting to fetch fresh lot size.")
-            # Use cache-only to prevent blocking during a critical hedge operation.
-            spot_details = await get_spot_details(symbol, use_cache_only=True)
+            # --- FIX: Allow network fallback for spot_details if cache is empty ---
+            spot_details = await get_spot_details(symbol, use_cache_only=False)
+            # --- END FIX ---
             if spot_details and spot_details.get('lot_size', 0) > 0:
                 lot_size = spot_details['lot_size']
                 logger.info(f"✅ Successfully fetched fresh lot_size={lot_size} for {symbol}. Using this for current hedge operation.")
@@ -369,7 +703,7 @@ async def execute_synthetic_hedge(
             logger.info(f"🛡️ Hedge: Cache miss for {symbol}. Fetching from service...")
             option_chain = await get_option_chain_from_service(symbol.upper())
             if option_chain:
-                state.update_option_chain(symbol.upper(), option_chain)
+                state.publish_option_chain(symbol.upper(), option_chain)
         # --- END FIX ---
         
         if not option_chain or not option_chain.get('chain'):
@@ -405,9 +739,9 @@ async def execute_synthetic_hedge(
         
         original_trade_strike = trade.get("strike")
         if original_trade_strike != atm_strike:
-            logger.info(f"🎯 Original Strike: {original_trade_strike} -> Hedging at current ATM Strike: {atm_strike}")
+            logger.debug(f"🎯 Original Strike: {original_trade_strike} -> Hedging at current ATM Strike: {atm_strike}")
         else:
-            logger.info(f"🎯 Hedging at current ATM Strike: {atm_strike}")
+            logger.debug(f"🎯 Hedging at current ATM Strike: {atm_strike}")
 
         if not ce_token or not pe_token:
             error_msg = f"Missing CE/PE tokens for ATM strike {atm_strike} for {trade_uid}"
@@ -428,10 +762,10 @@ async def execute_synthetic_hedge(
 
         # --- NEW: Use generate_chunked_orders for consistency ---
         logger.info(f"🎯 [{trade_uid}] Direction: {hedge_dir}")
-        logger.info(f"📍 Strike {atm_strike} | CE({ce_token}): {ce_side} | PE({pe_token}): {pe_side}")
+        logger.debug(f"📍 Strike {atm_strike} | CE({ce_token}): {ce_side} | PE({pe_token}): {pe_side}")
 
         # Determine prefix for order UIDs
-        uid_prefix = uid_prefix_override if uid_prefix_override else f"HEDGE_{trade_uid}"
+        uid_prefix = uid_prefix_override if uid_prefix_override else f"H{trade_uid}"
 
         symbol_upper = symbol.upper()
         base_symbol = next((key for key in sorted(SYMBOL_CONFIG.keys(), key=len, reverse=True) if key in symbol_upper), None)
@@ -464,11 +798,12 @@ async def execute_synthetic_hedge(
             base_lots_for_trade=rounded_lots, # Use rounded_lots to calculate min_lots_per_order
             chunk_divisor=10, # This will be ignored
             max_order_qty=max_order_qty,
-            order_lots_per_call=order_lots_per_call
+            order_lots_per_call=None, # Ignore manual build limits for hedging
+            aggressive=True           # Force max lots per order for fast execution
         )
 
         # --- Inject limit order buffer from config into each order ---
-        default_buffer = 6.0 if "SENSEX" in symbol.upper() else 2.0
+        default_buffer = 8.0 if "SENSEX" in symbol.upper() else 4.0
         buy_buffer = float(config.get('buy_buffer', default_buffer))
         sell_buffer = float(config.get('sell_buffer', default_buffer))
         for chunk in all_chunks:
@@ -504,6 +839,15 @@ async def execute_synthetic_hedge(
             if trade_uid in state.cancellation_flags: del state.cancellation_flags[trade_uid]
             return {'success': False, 'error': 'Cancelled by user before execution'}
         # --- END CANCELLATION CHECK ---
+        
+        # --- FIX: Ensure no stale open orders before starting execution ---
+        try:
+            logger.info(f"Executing pre-hedge safety cancellation for {trade_uid}...")
+            await executor.cancel_all_open_orders_for_trade(trade_uid)
+            await asyncio.sleep(0.2) # Brief pause for cancellations to process
+        except Exception as cancel_e:
+            logger.error(f"Pre-hedge safety cancellation failed for {trade_uid}: {cancel_e}")
+        # --- END FIX ---
 
         # Execute Batch 1
         if batch_1_orders:
@@ -529,6 +873,15 @@ async def execute_synthetic_hedge(
             if trade_uid in state.cancellation_flags: del state.cancellation_flags[trade_uid]
             # Return partial success since batch 1 may have executed
             return {'success': False, 'error': 'Cancelled by user after first batch', 'partial_success': True}
+        # --- END CANCELLATION CHECK ---
+
+        # --- FIX: Cancel any resting orders from Batch 1 before executing Batch 2 ---
+        try:
+            logger.info(f"Executing mid-hedge safety cancellation for {trade_uid} before Batch 2...")
+            await executor.cancel_all_open_orders_for_trade(trade_uid)
+            await asyncio.sleep(0.2) # Brief pause for cancellations to process
+        except Exception as cancel_e:
+            logger.error(f"Mid-hedge safety cancellation failed for {trade_uid}: {cancel_e}")
         # --- END CANCELLATION CHECK ---
 
         # Execute Batch 2
@@ -576,13 +929,13 @@ async def execute_synthetic_hedge(
             "orders_per_second": round(total_orders_to_place / total_time, 1) if total_time > 0 else 0,
         }
 
-        logger.info("=" * 100)
+        logger.debug("=" * 100)
         logger.info(f"✅ SYNTHETIC HEDGE COMPLETE [{trade_uid}]")
         logger.info(f"   Δ Before: {result['net_delta_before']:+.2f}")
         logger.info(f"   Target Reduction: {result['target_delta_reduction']:.2f}")
         logger.info(f"   Lots: {result['lots']} × {result['lot_size']} = {result['quantity_per_leg']}")
         logger.info(f"   Speed: {result['orders_per_second']:.1f} orders/sec")
-        logger.info("=" * 100)
+        logger.debug("=" * 100)
 
         return result
     finally:
@@ -592,10 +945,11 @@ async def execute_synthetic_hedge(
                 await executor.cancel_all_open_orders_for_trade(trade_uid)
         except Exception:
             pass
-        # --- FIX: Clear the temporary cache for this trade after the entire hedge operation is complete ---
+        # --- FIX: Do NOT clear the cache here. The calling function (e.g., square_off) needs it. ---
         if 'trade_uid' in locals() and trade_uid:
-            if hedge_type != "BUI_HEDGE":
-                if hasattr(state, 'temp_order_cache') and trade_uid in state.temp_order_cache:
-                    del state.temp_order_cache[trade_uid]
-                    logger.info(f"🧹 Cleared temp order cache for {trade_uid} after hedge operation.")
+            # Only clear for regular delta hedges. PRE_SQF_NEUTRAL must leave the cache for square_off.
+            if hedge_type not in ["PRE_SQF_NEUTRAL", "BUI_HEDGE"]:
+                if hasattr(state, 'trade_fill_cache') and trade_uid in state.trade_fill_cache:
+                    del state.trade_fill_cache[trade_uid]
+                    logger.info(f"🧹 Cleared temp order cache for {trade_uid} after DELTA hedge operation.")
         # --- END FIX ---

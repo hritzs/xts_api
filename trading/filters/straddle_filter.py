@@ -43,9 +43,9 @@ async def check_straddle_filter(
         
         logger.info("="*100)
         logger.info(f"📊 STRADDLE FILTER CHECK: {symbol}")
-        logger.info(f"   ATM Strike: {chain_data['atm']}")
-        logger.info(f"   CE LTP: ₹{ce_ltp:.2f}")
-        logger.info(f"   PE LTP: ₹{pe_ltp:.2f}")
+        logger.debug(f"   ATM Strike: {chain_data['atm']}")
+        logger.debug(f"   CE LTP: ₹{ce_ltp:.2f}")
+        logger.debug(f"   PE LTP: ₹{pe_ltp:.2f}")
         logger.info(f"   Straddle Price: ₹{straddle_price:.2f}")
         logger.info(f"   Filter: ₹{straddle_filter:.2f}")
         logger.info(f"   Result: {'✅ PASS' if passed else '❌ FAIL'}")

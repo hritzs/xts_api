@@ -418,9 +418,9 @@ async def health_check_handler(rep_socket: zmq.asyncio.Socket):
 async def main():
     global _order_shm, _db, _executor
 
-    logger.info("=" * 80)
+    logger.debug("=" * 80)
     logger.info("🚀 STARTING ORDER RECONCILIATION SERVICE (PROCESS 3)")
-    logger.info("=" * 80)
+    logger.debug("=" * 80)
 
     # ── Init resources ────────────────────────────────────────────────────────
     _db       = Database()
@@ -445,12 +445,12 @@ async def main():
     health_port = getattr(config, 'ZMQ_RECONCILER_REQ_PORT', 5568)
     health_rep_socket.bind(f"tcp://*:{health_port}")
 
-    logger.info("=" * 80)
+    logger.debug("=" * 80)
     logger.info("✅ ORDER RECONCILER READY")
     logger.info(f"   PUB  port (fills signal): {pub_port}")
     logger.info(f"   PULL port (job inbox):     {pull_port}")
     logger.info(f"   HEALTH REQ port:           {health_port}")
-    logger.info("=" * 80)
+    logger.debug("=" * 80)
 
     # ── Run all loops supervised ──────────────────────────────────────────────
     try:

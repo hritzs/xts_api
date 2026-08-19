@@ -1,0 +1,4470 @@
+﻿==================== FILE: static\option_chain.js ====================
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// option_chain.js
+// Rule: never self-initialises. init.js calls loadOptionChain().
+// Rule: fetch builds full table; websocket patches visible snapshot in place.
+// Rule: ignore stale fetch responses and stale websocket chain snapshots.
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+window._currentChainSymbol = null;
+window._chainATMTokens = null;        // { atm, ce_token, pe_token, gap, lot_size, ce_ltp_snap, pe_ltp_snap }
+window._lastPrices = {};              // token(string) â†’ ltp
+window._lastChainData = null;         // full visible chain snapshot
+window._chainRendering = false;       // render lock
+
+window._chainSnapshotVersion = 0;     // monotonic UI version
+window._chainLastPublishedAt = null;  // ISO timestamp from backend
+window._chainFetchSeq = 0;            // latest fetch request id
+window._chainAppliedFetchSeq = 0;     // latest applied fetch request id
+
+// â”€â”€ Inject option-chain styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+(function () {
+    if (document.getElementById('option-chain-styles')) return;
+    const s = document.createElement('style');
+    s.id = 'option-chain-styles';
+    s.textContent = `
+        #option-chain-container table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            font-family: 'Roboto Mono', monospace;
+        }
+
+        #option-chain-container thead th {
+            padding: 8px 10px;
+            text-align: center;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 2px solid #333;
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: #1a1a2e;
+            color: #888;
+        }
+        #option-chain-container thead th:nth-child(-n+4) {
+            background: #162416;
+            color: #6ea86e;
+        }
+        #option-chain-container thead th:nth-child(n+6) {
+            background: #241616;
+            color: #a86e6e;
+        }
+        #option-chain-container thead th:nth-child(5) {
+            background: #16162a;
+            color: #7090c0;
+        }
+
+        #option-chain-container tbody tr {
+            border-bottom: 1px solid #222;
+            transition: background 0.1s;
+        }
+        #option-chain-container tbody tr:hover td {
+            background: #2a2a3e !important;
+        }
+
+        #option-chain-container tbody td:nth-child(-n+4) {
+            background: #131f13;
+            color: #b8d4b8;
+            text-align: right;
+            padding: 6px 10px;
+        }
+        #option-chain-container tbody td:nth-child(n+6) {
+            background: #1f1313;
+            color: #d4b8b8;
+            text-align: left;
+            padding: 6px 10px;
+        }
+        #option-chain-container tbody td:nth-child(5) {
+            background: #161626;
+            color: #8090b0;
+            font-weight: 700;
+            text-align: center;
+            padding: 6px 12px;
+            border-left: 1px solid #2a2a3a;
+            border-right: 1px solid #2a2a3a;
+            font-size: 13px;
+        }
+        #option-chain-container tbody td:nth-child(4),
+        #option-chain-container tbody td:nth-child(6) {
+            font-weight: 600;
+        }
+
+        #option-chain-container tbody tr.atm-row td:nth-child(-n+4) {
+            background: #1e2a14 !important;
+        }
+        #option-chain-container tbody tr.atm-row td:nth-child(5) {
+            background: #2a2210 !important;
+            color: #ffc107 !important;
+            font-size: 14px !important;
+        }
+        #option-chain-container tbody tr.atm-row td:nth-child(n+6) {
+            background: #2a1414 !important;
+        }
+        #option-chain-container tbody tr.atm-row {
+            border-top: 1px solid rgba(255, 193, 7, 0.35);
+            border-bottom: 1px solid rgba(255, 193, 7, 0.35);
+        }
+
+        .chain-flash-up {
+            background: rgba(40, 167, 69, 0.5) !important;
+            transition: background 0.08s;
+        }
+        .chain-flash-down {
+            background: rgba(220, 53, 69, 0.5) !important;
+            transition: background 0.08s;
+        }
+
+        .iv-low  { color: #6ec96e !important; }
+        .iv-mid  { color: #ffc107 !important; }
+        .iv-high { color: #e07070 !important; }
+
+        .theta-low  { color: #6ec96e !important; }
+        .theta-mid  { color: #ffc107 !important; }
+        .theta-high { color: #e07070 !important; }
+
+        .chain-header-info {
+            display: flex;
+            gap: 18px;
+            align-items: center;
+            font-size: 13px;
+            color: #888;
+            flex-wrap: wrap;
+        }
+        .chain-header-info span { white-space: nowrap; }
+        #chain-spot-value   { color: #7fbfff; font-weight: 600; }
+        #chain-synfut-value { color: #b07fff; font-weight: 600; }
+        #chain-atm-value    { color: #ffc107; font-weight: 600; }
+        #chain-expiry-value { color: #888; }
+        #chain-var-value    { color: #ff9f43; font-weight: 600; }
+    `;
+    document.head.appendChild(s);
+})();
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// HELPERS
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function _symUpper(v) {
+    return String(v || '').toUpperCase();
+}
+
+function _sameSym(a, b) {
+    return _symUpper(a) === _symUpper(b);
+}
+
+function _num(v, d = 0) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : d;
+}
+
+function _isoMs(iso) {
+    if (!iso) return 0;
+    const t = Date.parse(iso);
+    return Number.isFinite(t) ? t : 0;
+}
+
+function _isNewerPublishedAt(nextIso, currIso) {
+    const a = _isoMs(nextIso);
+    const b = _isoMs(currIso);
+    if (!a && !b) return false;
+    if (a && !b) return true;
+    return a > b;
+}
+
+function _adoptSnapshotVersion(incoming) {
+    window._chainSnapshotVersion += 1;
+    if (incoming?.published_at) {
+        window._chainLastPublishedAt = incoming.published_at;
+    }
+}
+
+function _snapshotIsStale(incoming, source = 'unknown') {
+    if (!incoming) return true;
+
+    const selected = document.getElementById('symbol')?.value || window._currentChainSymbol || '';
+    if (selected && incoming.symbol && !_sameSym(selected, incoming.symbol)) {
+        console.debug(`[CHAIN-${source}] ignore: symbol mismatch`, {
+            selected,
+            incoming: incoming.symbol
+        });
+        return true;
+    }
+
+    const incomingTs = incoming.published_at;
+    const currentTs = window._chainLastPublishedAt;
+
+    if (incomingTs && currentTs && _isoMs(incomingTs) < _isoMs(currentTs)) {
+        console.warn(`[CHAIN-${source}] stale snapshot ignored`, {
+            incomingTs,
+            currentTs,
+            symbol: incoming.symbol
+        });
+        return true;
+    }
+
+    return false;
+}
+
+function _seedLastPricesFromSnapshot(chainData) {
+    (chainData?.chain || []).forEach(row => {
+        if (row.ce_token != null && row.ce_ltp != null) {
+            window._lastPrices[String(row.ce_token)] = Number(row.ce_ltp);
+        }
+        if (row.pe_token != null && row.pe_ltp != null) {
+            window._lastPrices[String(row.pe_token)] = Number(row.pe_ltp);
+        }
+    });
+
+    if (chainData?.fut_token != null && chainData?.fut_ltp != null) {
+        window._lastPrices[String(chainData.fut_token)] = Number(chainData.fut_ltp);
+    }
+}
+
+function _rebuildATMTokensFromData(chainData) {
+    const atmRow = (chainData?.chain || []).find(r => Number(r.strike) === Number(chainData.atm));
+    if (atmRow?.ce_token && atmRow?.pe_token) {
+        window._chainATMTokens = {
+            atm: Number(chainData.atm),
+            ce_token: String(atmRow.ce_token),
+            pe_token: String(atmRow.pe_token),
+            gap: Number(chainData.gap ?? 50),
+            lot_size: Number(atmRow.ce_lot_size ?? chainData.lot_size ?? 50),
+            ce_ltp_snap: Number(atmRow.ce_ltp || 0),
+            pe_ltp_snap: Number(atmRow.pe_ltp || 0),
+        };
+    }
+}
+
+function _computeDisplayedSynFut(chainData) {
+    const atm = Number(chainData?.atm ?? 0);
+    const atmRow = (chainData?.chain || []).find(r => Number(r.strike) === atm);
+
+    if (atm > 0 && atmRow?.ce_ltp > 0 && atmRow?.pe_ltp > 0) {
+        return atm + Number(atmRow.ce_ltp) - Number(atmRow.pe_ltp);
+    }
+
+    return Number(chainData?.synthetic_spot ?? 0) || null;
+}
+
+function _patchHeaderFromChainData(chainData) {
+    const spotEl = document.getElementById('chain-spot-value');
+    const synFutEl = document.getElementById('chain-synfut-value');
+    const atmEl = document.getElementById('chain-atm-value');
+    const expiryEl = document.getElementById('chain-expiry-value');
+    const varEl = document.getElementById('chain-var-value');
+
+    const synFutVal = _computeDisplayedSynFut(chainData);
+
+    if (spotEl) spotEl.textContent = chainData?.fut_ltp ? `â‚¹${Number(chainData.fut_ltp).toFixed(2)}` : '--';
+    if (synFutEl) synFutEl.textContent = synFutVal ? `â‚¹${Number(synFutVal).toFixed(2)}` : '--';
+    if (atmEl) atmEl.textContent = chainData?.atm ?? '--';
+    if (expiryEl) expiryEl.textContent = chainData?.expiry ?? '--';
+
+    if (varEl) {
+        if (_num(chainData?.var_pts) > 0) {
+            varEl.textContent = chainData?.var_pct
+                ? `Â±${Number(chainData.var_pts).toFixed(1)} pts (${Number(chainData.var_pct).toFixed(2)}%)`
+                : `Â±${Number(chainData.var_pts).toFixed(1)} pts`;
+        } else {
+            varEl.textContent = '--';
+        }
+    }
+
+    const atmInput = document.getElementById('atm-strike');
+    if (atmInput && chainData?.atm) atmInput.value = chainData.atm;
+}
+
+function _mergeIncomingChainData(incoming) {
+    const current = window._lastChainData || {};
+    const merged = { ...current, ...incoming };
+
+    if (Array.isArray(incoming.chain)) {
+        merged.chain = incoming.chain;
+    } else if (Array.isArray(current.chain)) {
+        merged.chain = current.chain;
+    }
+
+    return merged;
+}
+
+function _patchSingleChainRow(row) {
+    const tr = document.querySelector(`#option-chain-container tr[data-strike="${row.strike}"]`);
+    if (!tr) return;
+
+    const tds = tr.querySelectorAll('td');
+    if (!tds || tds.length < 9) return;
+
+    tds[0].textContent = _f2(row.ce_theta);
+    tds[0].className = _thetaCls(row.ce_theta);
+
+    tds[1].textContent = _f2(row.ce_vega);
+
+    tds[2].textContent = `${_f2(row.ce_iv)}%`;
+    tds[2].className = _ivCls(row.ce_iv);
+
+    const ceCell = tds[3];
+    const ceSpan = ceCell.querySelector('span');
+    if (ceSpan) ceSpan.textContent = row.ce_ltp != null ? `â‚¹${Number(row.ce_ltp).toFixed(2)}` : '--';
+    if (row.ce_token != null) ceCell.setAttribute('data-token', String(row.ce_token));
+    ceCell.setAttribute('data-prev-price', row.ce_ltp ?? 0);
+
+    tds[4].textContent = row.strike;
+
+    const peCell = tds[5];
+    const peSpan = peCell.querySelector('span');
+    if (peSpan) peSpan.textContent = row.pe_ltp != null ? `â‚¹${Number(row.pe_ltp).toFixed(2)}` : '--';
+    if (row.pe_token != null) peCell.setAttribute('data-token', String(row.pe_token));
+    peCell.setAttribute('data-prev-price', row.pe_ltp ?? 0);
+
+    tds[6].textContent = `${_f2(row.pe_iv)}%`;
+    tds[6].className = _ivCls(row.pe_iv);
+
+    tds[7].textContent = _f2(row.pe_vega);
+
+    tds[8].textContent = _f2(row.pe_theta);
+    tds[8].className = _thetaCls(row.pe_theta);
+}
+
+function _patchVisibleTableRows(chainData) {
+    if (!Array.isArray(chainData?.chain)) return;
+
+    chainData.chain.forEach(_patchSingleChainRow);
+
+    const newAtm = Number(chainData.atm ?? 0);
+    let atmChanged = false;
+
+    document.querySelectorAll('#option-chain-container tr[data-strike]').forEach(row => {
+        const strike = Number(row.getAttribute('data-strike'));
+        const wasAtm = row.classList.contains('atm-row');
+        const isAtm = strike === newAtm;
+
+        row.style.background = '';
+        row.style.fontWeight = '';
+
+        if (isAtm) row.classList.add('atm-row');
+        else row.classList.remove('atm-row');
+
+        if (wasAtm !== isAtm && isAtm) {
+            atmChanged = true;
+        }
+    });
+
+    if (atmChanged) {
+        requestAnimationFrame(scrollAtmToCenter);
+    }
+}
+
+function _debugRow24150(tag, chainData) {
+    if (_symUpper(chainData?.symbol) !== 'NIFTY') return;
+    const row = (chainData?.chain || []).find(r => Number(r.strike) === 24150);
+    if (!row) return;
+
+    console.log(tag, {
+        published_at: chainData?.published_at,
+        fut_ltp: chainData?.fut_ltp,
+        synthetic_spot: chainData?.synthetic_spot,
+        atm: chainData?.atm,
+        row24150: {
+            ce_ltp: row.ce_ltp,
+            pe_ltp: row.pe_ltp,
+            ce_iv: row.ce_iv,
+            pe_iv: row.pe_iv,
+            ce_theta: row.ce_theta,
+            pe_theta: row.pe_theta,
+            ce_vega: row.ce_vega,
+            pe_vega: row.pe_vega,
+        }
+    });
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// STRADDLE PREMIUM
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function updateStraddlePremium() {
+    if (!window._chainATMTokens) return;
+
+    const {
+        atm,
+        ce_token, pe_token,
+        lot_size,
+        ce_ltp_snap, pe_ltp_snap
+    } = window._chainATMTokens;
+
+    const prices = window._lastPrices || {};
+
+    const ce_ltp = prices[String(ce_token)] || ce_ltp_snap || 0;
+    const pe_ltp = prices[String(pe_token)] || pe_ltp_snap || 0;
+
+    const straddle = ce_ltp + pe_ltp;
+    const lots = parseInt(document.getElementById('lots')?.value, 10) || 1;
+    const total = straddle * lots * (lot_size || 50);
+
+    const atmEl = document.getElementById('atm-strike');
+    const premEl = document.getElementById('straddle-premium');
+    const totEl = document.getElementById('total-premium');
+
+    if (atmEl) atmEl.value = atm ?? '--';
+    if (premEl) premEl.value = straddle > 0 ? `â‚¹${straddle.toFixed(2)}` : '--';
+    if (totEl) {
+        totEl.value = total > 0
+            ? `â‚¹${total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            : '--';
+    }
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ATM CENTERING
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function scrollAtmToCenter() {
+    const div = document.getElementById('option-chain-container');
+    const atmRow = div?.querySelector('tr.atm-row');
+    if (!div || !atmRow) return;
+
+    let container = div;
+    let el = div.parentElement;
+    while (el && el !== document.body) {
+        const overflow = getComputedStyle(el).overflowY;
+        if (overflow === 'auto' || overflow === 'scroll') {
+            container = el;
+            break;
+        }
+        el = el.parentElement;
+    }
+
+    if (container === document.body || container === div) {
+        atmRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } else {
+        const containerMid = container.clientHeight / 2;
+        const rowTop = atmRow.offsetTop - container.offsetTop;
+        const rowMid = atmRow.offsetHeight / 2;
+        container.scrollTo({ top: rowTop - containerMid + rowMid, behavior: 'smooth' });
+    }
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ENTRY POINTS
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function loadOptionChain() {
+    const sym = document.getElementById('symbol')?.value || 'NIFTY';
+    fetchOptionChain(sym);
+}
+
+document.getElementById('btn-fetch-chain')?.addEventListener('click', () => {
+    const sym = document.getElementById('symbol')?.value || 'NIFTY';
+    const div = document.getElementById('option-chain-container');
+    if (div) div.innerHTML = '<div class="placeholder">ðŸ”„ Fetching option chain...</div>';
+    fetchOptionChain(sym);
+});
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// LIVE HEADER UPDATE
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function handleChainHeaderUpdate(msg) {
+    const { symbol, spot, syn_fut, atm, expiry, var_pts, var_pct } = msg || {};
+
+    const displayed = window._currentChainSymbol || '';
+    if (displayed && symbol && !_sameSym(symbol, displayed)) return;
+
+    const spotEl = document.getElementById('chain-spot-value');
+    const synFutEl = document.getElementById('chain-synfut-value');
+    const atmEl = document.getElementById('chain-atm-value');
+    const expiryEl = document.getElementById('chain-expiry-value');
+    const varEl = document.getElementById('chain-var-value');
+
+    if (spotEl && spot > 0) spotEl.textContent = `â‚¹${Number(spot).toFixed(2)}`;
+    if (synFutEl && syn_fut > 0) synFutEl.textContent = `â‚¹${Number(syn_fut).toFixed(2)}`;
+    if (atmEl && atm) atmEl.textContent = atm;
+    if (expiryEl && expiry) expiryEl.textContent = expiry;
+
+    if (varEl) {
+        if (var_pts > 0) {
+            varEl.textContent = var_pct
+                ? `Â±${Number(var_pts).toFixed(1)} pts (${Number(var_pct).toFixed(2)}%)`
+                : `Â±${Number(var_pts).toFixed(1)} pts`;
+        } else {
+            varEl.textContent = '--';
+        }
+    }
+
+    const atmInput = document.getElementById('atm-strike');
+    if (atmInput && atm) atmInput.value = atm;
+
+    if (atm) {
+        const prevAtm = window._chainATMTokens?.atm;
+
+        document.querySelectorAll('#option-chain-container tr[data-strike]').forEach(row => {
+            row.style.background = '';
+            row.style.fontWeight = '';
+            const s = parseInt(row.getAttribute('data-strike'), 10);
+            s === Number(atm) ? row.classList.add('atm-row') : row.classList.remove('atm-row');
+        });
+
+        if (Number(atm) !== Number(prevAtm)) {
+            requestAnimationFrame(scrollAtmToCenter);
+        }
+
+        if (window._chainATMTokens && Number(atm) !== Number(prevAtm)) {
+            const chainData = window._lastChainData;
+            if (chainData?.chain) {
+                const newAtmRow = chainData.chain.find(r => Number(r.strike) === Number(atm));
+                if (newAtmRow?.ce_token && newAtmRow?.pe_token) {
+                    window._chainATMTokens = {
+                        ...window._chainATMTokens,
+                        atm: Number(atm),
+                        ce_token: String(newAtmRow.ce_token),
+                        pe_token: String(newAtmRow.pe_token),
+                        ce_ltp_snap: newAtmRow.ce_ltp || 0,
+                        pe_ltp_snap: newAtmRow.pe_ltp || 0,
+                    };
+                    updateStraddlePremium();
+                }
+            }
+        }
+    }
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// LIVE PRICE UPDATE
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function handleChainPriceUpdate(prices) {
+    let atmTouched = false;
+
+    Object.entries(prices || {}).forEach(([token, ltp]) => {
+        const tokenStr = String(token);
+        const val = Number(ltp);
+        if (!Number.isFinite(val)) return;
+
+        window._lastPrices[tokenStr] = val;
+
+        if (window._chainATMTokens) {
+            const { ce_token, pe_token } = window._chainATMTokens;
+            if (tokenStr === String(ce_token) || tokenStr === String(pe_token)) atmTouched = true;
+        }
+
+        document.querySelectorAll(`#option-chain-container [data-token="${tokenStr}"]`).forEach(cell => {
+            const span = cell.querySelector('span');
+            if (!span) return;
+
+            const prev = parseFloat(cell.getAttribute('data-prev-price') || val);
+            span.textContent = `â‚¹${val.toFixed(2)}`;
+
+            if (val > prev) {
+                cell.classList.add('chain-flash-up');
+                setTimeout(() => cell.classList.remove('chain-flash-up'), 600);
+            } else if (val < prev) {
+                cell.classList.add('chain-flash-down');
+                setTimeout(() => cell.classList.remove('chain-flash-down'), 600);
+            }
+
+            cell.setAttribute('data-prev-price', String(val));
+        });
+    });
+
+    if (window._chainATMTokens) {
+        const { atm, ce_token, pe_token, gap } = window._chainATMTokens;
+        const ce_p = prices?.[ce_token]
+                  ?? prices?.[parseInt(ce_token, 10)]
+                  ?? window._lastPrices[String(ce_token)];
+        const pe_p = prices?.[pe_token]
+                  ?? prices?.[parseInt(pe_token, 10)]
+                  ?? window._lastPrices[String(pe_token)];
+
+        if (ce_p > 0 && pe_p > 0) {
+            const syn = atm + ce_p - pe_p;
+            if (Math.abs(syn - atm) <= gap * 2) {
+                const el = document.getElementById('chain-synfut-value');
+                if (el) el.textContent = `â‚¹${syn.toFixed(2)}`;
+            }
+        }
+    }
+
+    if (atmTouched) updateStraddlePremium();
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// FETCH
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+async function fetchOptionChain(symbol = null) {
+    if (window._chainRendering) return;
+
+    const sym = symbol
+        || document.getElementById('symbol')?.value
+        || 'NIFTY';
+
+    const div = document.getElementById('option-chain-container');
+    const reqId = ++window._chainFetchSeq;
+
+    try {
+        const url = `/api/option-chain/${encodeURIComponent(sym)}?ts=${Date.now()}`;
+        const res = await fetch(url, {
+            method: 'GET',
+            cache: 'no-store',
+            headers: {
+                'Cache-Control': 'no-cache, no-store, max-age=0',
+                'Pragma': 'no-cache'
+            }
+        });
+
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+
+        if (reqId < window._chainAppliedFetchSeq) {
+            console.warn('[CHAIN-FETCH] stale fetch response ignored', {
+                reqId,
+                applied: window._chainAppliedFetchSeq,
+                symbol: sym
+            });
+            return;
+        }
+
+        if (data.success && data.data) {
+            if (_snapshotIsStale(data.data, 'FETCH')) return;
+
+            window._chainAppliedFetchSeq = reqId;
+
+            console.log('[UI-FETCH-option-chain]', data.data);
+            _debugRow24150('[UI-FETCH-24150]', data.data);
+
+            displayOptionChain(data.data);
+
+            if (typeof roundQuantity === 'function') {
+                roundQuantity('lots');
+                roundQuantity('config-size');
+                roundQuantity('manual_lots_per_call');
+                roundQuantity('auto_lots_per_call');
+            }
+        } else {
+            if (div) {
+                div.innerHTML = `<div class="placeholder">âŒ ${data.error || 'Chain unavailable'}</div>`;
+            }
+        }
+    } catch (err) {
+        console.error('Option chain fetch error:', err);
+        if (div) {
+            div.innerHTML = `<div class="placeholder">âŒ ${err.message}</div>`;
+        }
+    }
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// RENDER â€” full rebuild on fetch only
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function displayOptionChain(chainData) {
+    const div = document.getElementById('option-chain-container');
+    if (!div || !chainData) return;
+
+    window._chainRendering = true;
+
+    try {
+        window._lastChainData = chainData;
+        _adoptSnapshotVersion(chainData);
+
+        if (chainData.symbol) {
+            window._currentChainSymbol = chainData.symbol.toUpperCase();
+        }
+
+        if (chainData.fut_token != null) {
+            div.setAttribute('data-fut-token', chainData.fut_token);
+        }
+
+        _rebuildATMTokensFromData(chainData);
+        _seedLastPricesFromSnapshot(chainData);
+
+        const synFutVal = _computeDisplayedSynFut(chainData);
+
+        const spotEl = document.getElementById('chain-spot-value');
+        const synFutEl = document.getElementById('chain-synfut-value');
+        const atmEl = document.getElementById('chain-atm-value');
+        const expiryEl = document.getElementById('chain-expiry-value');
+        const varEl = document.getElementById('chain-var-value');
+
+        if (spotEl) spotEl.textContent = chainData.fut_ltp ? `â‚¹${Number(chainData.fut_ltp).toFixed(2)}` : '--';
+        if (synFutEl) synFutEl.textContent = synFutVal ? `â‚¹${Number(synFutVal).toFixed(2)}` : '--';
+        if (atmEl) atmEl.textContent = chainData.atm ?? '--';
+        if (expiryEl) expiryEl.textContent = chainData.expiry ?? '--';
+        if (varEl) {
+            varEl.textContent = _num(chainData.var_pts) > 0
+                ? (chainData.var_pct
+                    ? `Â±${Number(chainData.var_pts).toFixed(1)} pts (${Number(chainData.var_pct).toFixed(2)}%)`
+                    : `Â±${Number(chainData.var_pts).toFixed(1)} pts`)
+                : '--';
+        }
+
+        let html = `
+            <table>
+                <thead>
+                    <tr>
+                        <th>Theta</th>
+                        <th>Vega</th>
+                        <th>IV %</th>
+                        <th>CE LTP</th>
+                        <th>Strike</th>
+                        <th>PE LTP</th>
+                        <th>IV %</th>
+                        <th>Vega</th>
+                        <th>Theta</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+        (chainData.chain || []).forEach(row => {
+            const isATM = Number(row.strike) === Number(chainData.atm);
+            const atmCls = isATM ? 'atm-row' : '';
+
+            const ceAttr = row.ce_token != null ? `data-token="${String(row.ce_token)}"` : '';
+            const peAttr = row.pe_token != null ? `data-token="${String(row.pe_token)}"` : '';
+
+            html += `
+                <tr class="${atmCls}" data-strike="${row.strike}">
+                    <td class="${_thetaCls(row.ce_theta)}">${_f2(row.ce_theta)}</td>
+                    <td>${_f2(row.ce_vega)}</td>
+                    <td class="${_ivCls(row.ce_iv)}">${_f2(row.ce_iv)}%</td>
+                    <td ${ceAttr} data-prev-price="${row.ce_ltp ?? 0}">
+                        <span>${row.ce_ltp != null ? `â‚¹${Number(row.ce_ltp).toFixed(2)}` : '--'}</span>
+                    </td>
+                    <td>${row.strike}</td>
+                    <td ${peAttr} data-prev-price="${row.pe_ltp ?? 0}">
+                        <span>${row.pe_ltp != null ? `â‚¹${Number(row.pe_ltp).toFixed(2)}` : '--'}</span>
+                    </td>
+                    <td class="${_ivCls(row.pe_iv)}">${_f2(row.pe_iv)}%</td>
+                    <td>${_f2(row.pe_vega)}</td>
+                    <td class="${_thetaCls(row.pe_theta)}">${_f2(row.pe_theta)}</td>
+                </tr>`;
+        });
+
+        html += '</tbody></table>';
+        div.innerHTML = html;
+
+        updateStraddlePremium();
+        _debugRow24150('[UI-RENDER-24150]', chainData);
+
+        requestAnimationFrame(scrollAtmToCenter);
+    } finally {
+        requestAnimationFrame(() => {
+            window._chainRendering = false;
+        });
+    }
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// WEBSOCKET PATCH ENTRY
+// Call this from websocket.js when option_chain_update arrives.
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function applyOptionChainSnapshotPatch(incoming) {
+    if (!incoming) return false;
+    if (_snapshotIsStale(incoming, 'WS')) return false;
+
+    const merged = _mergeIncomingChainData(incoming);
+    window._lastChainData = merged;
+    _adoptSnapshotVersion(merged);
+
+    if (merged.symbol) {
+        window._currentChainSymbol = merged.symbol.toUpperCase();
+    }
+
+    const div = document.getElementById('option-chain-container');
+    if (div && merged.fut_token != null) {
+        div.setAttribute('data-fut-token', merged.fut_token);
+    }
+
+    _seedLastPricesFromSnapshot(merged);
+    _rebuildATMTokensFromData(merged);
+    _patchHeaderFromChainData(merged);
+
+    if (Array.isArray(merged.chain) && merged.chain.length > 0) {
+        _patchVisibleTableRows(merged);
+    }
+
+    updateStraddlePremium();
+    _debugRow24150('[UI-WS-PATCH-24150]', merged);
+    return true;
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// COLOUR HELPERS
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function _f2(v) {
+    return (v != null && !isNaN(v)) ? parseFloat(v).toFixed(2) : '--';
+}
+
+function _ivCls(iv) {
+    if (iv == null) return '';
+    if (iv < 14) return 'iv-low';
+    if (iv < 20) return 'iv-mid';
+    return 'iv-high';
+}
+
+function _thetaCls(theta) {
+    if (theta == null) return '';
+    if (theta < -1) return 'theta-high';
+    if (theta < -0.3) return 'theta-mid';
+    return 'theta-low';
+}
+
+
+==================== FILE: static\websocket.js ====================
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// websocket.js â€” Real-time WebSocket client
+//
+// Rule: no DOMContentLoaded here. init.js calls connectWebSocket().
+// Rule: option_chain_update should keep the visible chain snapshot in sync.
+//       It may patch header + row values in place, but should not do a full
+//       table rebuild unless explicitly requested elsewhere.
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+let straddleChannel = null;
+try {
+    straddleChannel = new BroadcastChannel('straddle_updates');
+} catch (e) {
+    console.warn('âš ï¸ BroadcastChannel unavailable in this browser/context:', e);
+}
+
+let ws = null;
+let _reconnectTimer = null;
+let _reconnectDelay = 1500;
+const _RECONNECT_MAX = 30000;
+const _RECONNECT_FACTOR = 1.5;
+
+// Debug switch
+window.__CHAIN_DEBUG = true;
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// CONNECTION
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function connectWebSocket() {
+    if (ws && (
+        ws.readyState === WebSocket.OPEN ||
+        ws.readyState === WebSocket.CONNECTING
+    )) {
+        return;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+    console.log('ðŸ”Œ Connecting to WebSocket:', wsUrl);
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+        console.log('âœ… WebSocket connected');
+        if (typeof updateStatus === 'function') {
+            updateStatus('ws-status', 'LIVE', true);
+        }
+
+        _reconnectDelay = 1500;
+
+        if (_reconnectTimer) {
+            clearTimeout(_reconnectTimer);
+            _reconnectTimer = null;
+        }
+
+        if (typeof handleLogMessage === 'function') {
+            handleLogMessage({
+                level: 'SUCCESS',
+                message: 'Real-time connection established.',
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        const sym = _selectedSymbol() || window._currentChainSymbol || 'NIFTY';
+        setTimeout(() => {
+            if (typeof fetchOptionChain === 'function') {
+                console.log('[WS-RESYNC-fetchOptionChain]', { symbol: sym });
+                fetchOptionChain(sym);
+            }
+        }, 250);
+    };
+
+    ws.onmessage = (event) => {
+        try {
+            const parsed = JSON.parse(event.data);
+            handleWebSocketMessage(parsed);
+        } catch (e) {
+            console.error('âŒ WS parse error:', e, event?.data);
+        }
+    };
+
+    ws.onerror = (error) => {
+        console.error('âŒ WebSocket error:', error);
+        if (typeof updateStatus === 'function') {
+            updateStatus('ws-status', 'ERROR', false);
+        }
+    };
+
+    ws.onclose = () => {
+        console.warn('ðŸ”´ WebSocket disconnected');
+        if (typeof updateStatus === 'function') {
+            updateStatus('ws-status', 'OFFLINE', false);
+        }
+
+        ws = null;
+
+        if (typeof handleLogMessage === 'function') {
+            handleLogMessage({
+                level: 'ERROR',
+                message: `Connection lost. Reconnecting in ${(_reconnectDelay / 1000).toFixed(1)}s...`,
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        if (!_reconnectTimer) {
+            const jitter = Math.floor(Math.random() * 300);
+            const delayWithJitter = Math.min(_reconnectDelay + jitter, _RECONNECT_MAX);
+
+            _reconnectTimer = setTimeout(() => {
+                _reconnectTimer = null;
+                _reconnectDelay = Math.min(_reconnectDelay * _RECONNECT_FACTOR, _RECONNECT_MAX);
+                connectWebSocket();
+            }, delayWithJitter);
+        }
+    };
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// HELPERS
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function _selectedSymbol() {
+    return (document.getElementById('symbol')?.value || '').toUpperCase();
+}
+
+function _sameSymbol(a, b) {
+    return String(a || '').toUpperCase() === String(b || '').toUpperCase();
+}
+
+function _safeNum(v, d = 0) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : d;
+}
+
+function _f2ws(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toFixed(2) : '--';
+}
+
+function _mergeChainSnapshot(incoming) {
+    if (!incoming || typeof incoming !== 'object') return;
+
+    const current = window._lastChainData || {};
+    const merged = { ...current, ...incoming };
+
+    if (Array.isArray(incoming.chain)) {
+        merged.chain = incoming.chain;
+    } else if (Array.isArray(current.chain)) {
+        merged.chain = current.chain;
+    }
+
+    window._lastChainData = merged;
+}
+
+function _refreshATMTokensFromSnapshot() {
+    const chainData = window._lastChainData;
+    if (!chainData?.chain || !chainData?.atm) return;
+
+    const atmRow = chainData.chain.find(r => Number(r.strike) === Number(chainData.atm));
+    if (!atmRow?.ce_token || !atmRow?.pe_token) return;
+
+    window._chainATMTokens = {
+        atm: Number(chainData.atm),
+        ce_token: String(atmRow.ce_token),
+        pe_token: String(atmRow.pe_token),
+        gap: Number(chainData.gap ?? 50),
+        lot_size: Number(atmRow.ce_lot_size ?? chainData.lot_size ?? 50),
+        ce_ltp_snap: Number(atmRow.ce_ltp || 0),
+        pe_ltp_snap: Number(atmRow.pe_ltp || 0),
+    };
+}
+
+function _seedLastPricesFromChainRows(chainRows) {
+    if (!Array.isArray(chainRows)) return;
+    window._lastPrices = window._lastPrices || {};
+
+    chainRows.forEach(row => {
+        if (row?.ce_token != null && row?.ce_ltp != null) {
+            window._lastPrices[String(row.ce_token)] = Number(row.ce_ltp);
+        }
+        if (row?.pe_token != null && row?.pe_ltp != null) {
+            window._lastPrices[String(row.pe_token)] = Number(row.pe_ltp);
+        }
+    });
+}
+
+function _patchHeaderFromSnapshot(chainData) {
+    if (!chainData) return;
+
+    const spotEl = document.getElementById('chain-spot-value');
+    const synFutEl = document.getElementById('chain-synfut-value');
+    const atmEl = document.getElementById('chain-atm-value');
+    const expiryEl = document.getElementById('chain-expiry-value');
+    const varEl = document.getElementById('chain-var-value');
+
+    const spot = _safeNum(chainData.fut_ltp, 0);
+    let syn = _safeNum(chainData.synthetic_spot, 0);
+
+    const atm = Number(chainData.atm ?? 0);
+    const atmRow = Array.isArray(chainData.chain)
+        ? chainData.chain.find(r => Number(r.strike) === atm)
+        : null;
+
+    if (atm > 0 && atmRow) {
+        const ce = _safeNum(atmRow.ce_ltp, 0);
+        const pe = _safeNum(atmRow.pe_ltp, 0);
+        if (ce > 0 && pe > 0) {
+            syn = atm + ce - pe;
+        }
+    }
+
+    if (spotEl) spotEl.textContent = spot > 0 ? `â‚¹${spot.toFixed(2)}` : '--';
+    if (synFutEl) synFutEl.textContent = syn > 0 ? `â‚¹${syn.toFixed(2)}` : '--';
+    if (atmEl) atmEl.textContent = atm || '--';
+    if (expiryEl) expiryEl.textContent = chainData.expiry ?? '--';
+
+    if (varEl && chainData.var_pts > 0) {
+        varEl.textContent = chainData.var_pct
+            ? `Â±${Number(chainData.var_pts).toFixed(1)} pts (${Number(chainData.var_pct).toFixed(2)}%)`
+            : `Â±${Number(chainData.var_pts).toFixed(1)} pts`;
+    }
+}
+
+function _debugDom24150(tag) {
+    const tr = document.querySelector('#option-chain-container tr[data-strike="24150"]');
+    if (!tr) {
+        console.log(tag, 'DOM row 24150 not found');
+        return;
+    }
+
+    const tds = tr.querySelectorAll('td');
+    console.log(tag, {
+        ce_theta: tds[0]?.textContent?.trim(),
+        ce_vega:  tds[1]?.textContent?.trim(),
+        ce_iv:    tds[2]?.textContent?.trim(),
+        ce_ltp:   tds[3]?.textContent?.trim(),
+        strike:   tds[4]?.textContent?.trim(),
+        pe_ltp:   tds[5]?.textContent?.trim(),
+        pe_iv:    tds[6]?.textContent?.trim(),
+        pe_vega:  tds[7]?.textContent?.trim(),
+        pe_theta: tds[8]?.textContent?.trim(),
+    });
+}
+
+function _debug24150(prefix, chainData) {
+    if (!chainData?.chain) return;
+    const symbol = String(chainData.symbol || '').toUpperCase();
+    if (symbol !== 'NIFTY') return;
+
+    const row = chainData.chain.find(r => Number(r.strike) === 24150);
+    if (!row) return;
+
+    console.log(prefix, {
+        symbol,
+        spot: chainData.fut_ltp,
+        syn: chainData.synthetic_spot,
+        atm: chainData.atm,
+        published_at: chainData.published_at,
+        row24150: {
+            ce_ltp: row.ce_ltp,
+            pe_ltp: row.pe_ltp,
+            ce_iv: row.ce_iv,
+            pe_iv: row.pe_iv,
+            ce_vega: row.ce_vega,
+            pe_vega: row.pe_vega,
+            ce_theta: row.ce_theta,
+            pe_theta: row.pe_theta,
+        }
+    });
+}
+
+function _patchSingleRow(rowData) {
+    if (!rowData) return;
+
+    if (window.__CHAIN_DEBUG && Number(rowData?.strike) === 24150) {
+        console.log('[PATCH-SINGLE-ROW-24150-IN]', structuredClone(rowData));
+    }
+
+    const rowEl = document.querySelector(
+        `#option-chain-container tr[data-strike="${rowData.strike}"]`
+    );
+    if (!rowEl) return;
+
+    const cells = rowEl.querySelectorAll('td');
+    if (!cells || cells.length < 9) return;
+
+    cells[0].textContent = _f2ws(rowData.ce_theta);
+    cells[0].className = typeof _thetaCls === 'function' ? _thetaCls(rowData.ce_theta) : '';
+
+    cells[1].textContent = _f2ws(rowData.ce_vega);
+
+    cells[2].textContent = `${_f2ws(rowData.ce_iv)}%`;
+    cells[2].className = typeof _ivCls === 'function' ? _ivCls(rowData.ce_iv) : '';
+
+    const ceSpan = cells[3].querySelector('span');
+    if (ceSpan) ceSpan.textContent = rowData.ce_ltp != null ? `â‚¹${Number(rowData.ce_ltp).toFixed(2)}` : '--';
+    if (rowData.ce_ltp != null) cells[3].setAttribute('data-prev-price', Number(rowData.ce_ltp));
+
+    cells[4].textContent = rowData.strike ?? '--';
+
+    const peSpan = cells[5].querySelector('span');
+    if (peSpan) peSpan.textContent = rowData.pe_ltp != null ? `â‚¹${Number(rowData.pe_ltp).toFixed(2)}` : '--';
+    if (rowData.pe_ltp != null) cells[5].setAttribute('data-prev-price', Number(rowData.pe_ltp));
+
+    cells[6].textContent = `${_f2ws(rowData.pe_iv)}%`;
+    cells[6].className = typeof _ivCls === 'function' ? _ivCls(rowData.pe_iv) : '';
+
+    cells[7].textContent = _f2ws(rowData.pe_vega);
+
+    cells[8].textContent = _f2ws(rowData.pe_theta);
+    cells[8].className = typeof _thetaCls === 'function' ? _thetaCls(rowData.pe_theta) : '';
+
+    if (window.__CHAIN_DEBUG && Number(rowData?.strike) === 24150) {
+        _debugDom24150('[PATCH-SINGLE-ROW-24150-OUT-DOM]');
+    }
+}
+
+function _patchTableFromSnapshot(chainData) {
+    if (!chainData?.chain || !Array.isArray(chainData.chain)) return;
+
+    chainData.chain.forEach(row => _patchSingleRow(row));
+
+    const atm = Number(chainData.atm ?? 0);
+    if (atm > 0) {
+        document.querySelectorAll('#option-chain-container tr[data-strike]').forEach(row => {
+            const strike = Number(row.getAttribute('data-strike'));
+            if (strike === atm) row.classList.add('atm-row');
+            else row.classList.remove('atm-row');
+        });
+    }
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// HANDLERS
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function handlePriceUpdate(data) {
+    if (!data) return;
+
+    if (window.__CHAIN_DEBUG) {
+        console.log('[WS-price_update-raw]', data);
+        _debug24150('[BEFORE-price_update-MEM]', window._lastChainData);
+        _debugDom24150('[BEFORE-price_update-DOM]');
+    }
+
+    if (typeof updatePrice === 'function') {
+        for (const [token, ltp] of Object.entries(data)) {
+            updatePrice(parseInt(token, 10), ltp);
+        }
+    }
+
+    if (typeof handleChainPriceUpdate === 'function') {
+        handleChainPriceUpdate(data);
+    }
+
+    if (window.__CHAIN_DEBUG) {
+        _debug24150('[AFTER-price_update-MEM]', window._lastChainData);
+        _debugDom24150('[AFTER-price_update-DOM]');
+    }
+}
+
+function handleChainHeader(msg) {
+    if (!msg) return;
+
+    if (typeof handleChainHeaderUpdate === 'function') {
+        handleChainHeaderUpdate(msg);
+    }
+
+    const el =
+        document.getElementById('spot-price-value') ??
+        document.getElementById('live-spot');
+
+    const spot = Number(msg?.spot ?? 0);
+    if (el && Number.isFinite(spot) && spot > 0) {
+        el.textContent = `â‚¹${spot.toFixed(2)}`;
+    }
+}
+
+function handleOptionChainUpdate(data) {
+    if (!data) return;
+
+    const selected = _selectedSymbol();
+    if (selected && data.symbol && !_sameSymbol(data.symbol, selected)) {
+        return;
+    }
+
+    if (window.__CHAIN_DEBUG) {
+        console.log('[WS-option_chain_update-raw]', {
+            published_at: data?.published_at,
+            symbol: data?.symbol,
+            row24150: data?.chain?.find(r => Number(r.strike) === 24150)
+        });
+        _debug24150('[BEFORE-option_chain_update-MEM]', window._lastChainData);
+        _debugDom24150('[BEFORE-option_chain_update-DOM]');
+    }
+
+    if (typeof _snapshotIsStale === 'function' && _snapshotIsStale(data, 'WS')) {
+        return;
+    }
+
+    if (typeof _mergeChainSnapshot === 'function') {
+        _mergeChainSnapshot(data);
+    } else {
+        window._lastChainData = {
+            ...(window._lastChainData || {}),
+            ...data,
+            chain: Array.isArray(data.chain)
+                ? data.chain
+                : (window._lastChainData?.chain || [])
+        };
+    }
+
+    const chainData = window._lastChainData;
+    if (!chainData) return;
+
+    if (typeof _adoptSnapshotVersion === 'function') {
+         _adoptSnapshotVersion(chainData);
+    } else if (data.published_at) {
+        window._chainLastPublishedAt = data.published_at;
+    }
+
+    if (chainData.symbol) {
+        window._currentChainSymbol = String(chainData.symbol).toUpperCase();
+    }
+
+    if (chainData.fut_token != null) {
+        const div = document.getElementById('option-chain-container');
+        if (div) div.setAttribute('data-fut-token', chainData.fut_token);
+    }
+
+    if (typeof _seedLastPricesFromChainRows === 'function') {
+        _seedLastPricesFromChainRows(data.chain || []);
+    } else if (Array.isArray(data.chain)) {
+        window._lastPrices = window._lastPrices || {};
+        data.chain.forEach(row => {
+            if (row?.ce_token != null && row?.ce_ltp != null) {
+                window._lastPrices[String(row.ce_token)] = Number(row.ce_ltp);
+            }
+            if (row?.pe_token != null && row?.pe_ltp != null) {
+                window._lastPrices[String(row.pe_token)] = Number(row.pe_ltp);
+            }
+        });
+    }
+
+    if (chainData.fut_token != null && chainData.fut_ltp != null) {
+        window._lastPrices = window._lastPrices || {};
+        window._lastPrices[String(chainData.fut_token)] = Number(chainData.fut_ltp);
+    }
+
+    if (typeof _refreshATMTokensFromSnapshot === 'function') {
+        _refreshATMTokensFromSnapshot();
+    } else if (chainData?.chain && chainData?.atm) {
+        const atmRow = chainData.chain.find(r => Number(r.strike) === Number(chainData.atm));
+        if (atmRow?.ce_token && atmRow?.pe_token) {
+            window._chainATMTokens = {
+                ...(window._chainATMTokens || {}),
+                atm: Number(chainData.atm),
+                ce_token: String(atmRow.ce_token),
+                pe_token: String(atmRow.pe_token),
+                gap: Number(chainData.gap ?? window._chainATMTokens?.gap ?? 50),
+                lot_size: Number(atmRow.ce_lot_size ?? chainData.lot_size ?? window._chainATMTokens?.lot_size ?? 50),
+                ce_ltp_snap: Number(atmRow.ce_ltp || 0),
+                pe_ltp_snap: Number(atmRow.pe_ltp || 0),
+            };
+        }
+    }
+
+    if (typeof _patchHeaderFromSnapshot === 'function') {
+        _patchHeaderFromSnapshot(chainData);
+    } else if (typeof handleChainHeaderUpdate === 'function') {
+        handleChainHeaderUpdate({
+            symbol: chainData.symbol,
+            spot: Number(chainData.fut_ltp ?? 0),
+            syn_fut: Number(chainData.synthetic_spot ?? chainData.fut_ltp ?? 0),
+            atm: chainData.atm,
+            expiry: chainData.expiry,
+            var_pts: chainData.var_pts,
+            var_pct: chainData.var_pct
+        });
+    }
+
+    if (Array.isArray(data.chain) && data.chain.length > 0) {
+        if (typeof _patchTableFromSnapshot === 'function') {
+            _patchTableFromSnapshot(chainData);
+        } else {
+            data.chain.forEach(row => {
+                const tr = document.querySelector(
+                    `#option-chain-container tr[data-strike="${row.strike}"]`
+                );
+                if (!tr) return;
+
+                const tds = tr.querySelectorAll('td');
+                if (!tds || tds.length < 9) return;
+
+                tds[0].textContent = _f2(row.ce_theta);
+                tds[0].className = _thetaCls(row.ce_theta);
+
+                tds[1].textContent = _f2(row.ce_vega);
+
+                tds[2].textContent = `${_f2(row.ce_iv)}%`;
+                tds[2].className = _ivCls(row.ce_iv);
+
+                const ceSpan = tds[3].querySelector('span');
+                if (ceSpan) ceSpan.textContent = row.ce_ltp != null ? `â‚¹${Number(row.ce_ltp).toFixed(2)}` : '--';
+                if (row.ce_ltp != null) tds[3].setAttribute('data-prev-price', Number(row.ce_ltp));
+                if (row.ce_token != null) tds[3].setAttribute('data-token', row.ce_token);
+
+                tds[4].textContent = row.strike ?? '--';
+
+                const peSpan = tds[5].querySelector('span');
+                if (peSpan) peSpan.textContent = row.pe_ltp != null ? `â‚¹${Number(row.pe_ltp).toFixed(2)}` : '--';
+                if (row.pe_ltp != null) tds[5].setAttribute('data-prev-price', Number(row.pe_ltp));
+                if (row.pe_token != null) tds[5].setAttribute('data-token', row.pe_token);
+
+                tds[6].textContent = `${_f2(row.pe_iv)}%`;
+                tds[6].className = _ivCls(row.pe_iv);
+
+                tds[7].textContent = _f2(row.pe_vega);
+
+                tds[8].textContent = _f2(row.pe_theta);
+                tds[8].className = _thetaCls(row.pe_theta);
+            });
+
+            const atm = Number(chainData.atm ?? 0);
+            if (atm > 0) {
+                document.querySelectorAll('#option-chain-container tr[data-strike]').forEach(row => {
+                    const strike = Number(row.getAttribute('data-strike'));
+                    if (strike === atm) row.classList.add('atm-row');
+                    else row.classList.remove('atm-row');
+                });
+            }
+        }
+    }
+
+    if (typeof updateStraddlePremium === 'function') {
+        updateStraddlePremium();
+    }
+
+    if (window.__CHAIN_DEBUG) {
+        _debug24150('[AFTER-option_chain_update-MEM]', chainData);
+        _debugDom24150('[AFTER-option_chain_update-DOM]');
+    }
+
+    if (typeof _debug24150 === 'function') {
+        _debug24150('[UI-WS-option_chain_update]', chainData);
+    }
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// MESSAGE ROUTER
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+function handleWebSocketMessage(data) {
+    if (!data || !data.type) return;
+
+    switch (data.type) {
+        case 'price_update':
+            handlePriceUpdate(data.data);
+            break;
+
+        case 'chain_header_update':
+            handleChainHeader(data);
+            break;
+
+        case 'option_chain_update':
+            handleOptionChainUpdate(data.data);
+            break;
+
+        case 'pnl_update':
+            if (typeof updatePnLDisplay === 'function') {
+                updatePnLDisplay(data.data);
+            }
+            break;
+
+        case 'pnl_batch_update':
+            if (typeof handlePnlBatchUpdate === 'function') {
+                handlePnlBatchUpdate(data.data);
+            }
+            break;
+
+        case 'straddle_update':
+            straddleChannel?.postMessage(data.data);
+            if (typeof handleStraddleUpdate === 'function') {
+                handleStraddleUpdate(data.data);
+            }
+            break;
+
+        case 'straddle_full_update':
+            if (typeof handleStraddleFullUpdate === 'function') {
+                handleStraddleFullUpdate(data.data);
+            } else if (typeof handleStraddleUpdate === 'function') {
+                handleStraddleUpdate(data.data);
+            }
+            break;
+
+        case 'straddle_placed':
+            if (typeof showNotification === 'function') {
+                showNotification(`Straddle placed: ${data.trade_uid}`, 'success');
+            }
+            if (typeof fetchStraddles === 'function') {
+                fetchStraddles();
+            }
+            break;
+
+        case 'straddle_closed':
+            if (typeof showNotification === 'function') {
+                showNotification(`Straddle closed: ${data.trade_uid}`, 'success');
+            }
+            if (typeof fetchStraddles === 'function') {
+                fetchStraddles();
+            }
+            break;
+
+        case 'log_message':
+            if (typeof handleLogMessage === 'function') {
+                handleLogMessage(data.data);
+            }
+            break;
+
+        case 'config_build_success':
+            if (typeof handleConfigBuildSuccess === 'function') {
+                handleConfigBuildSuccess(data);
+            }
+            break;
+
+        case 'config_build_failed':
+            if (typeof handleConfigBuildFailed === 'function') {
+                handleConfigBuildFailed(data);
+            }
+            break;
+
+        case 'xts_socket_status':
+            if (typeof updateStatus === 'function') {
+                updateStatus(
+                    'socket-status',
+                    data?.data?.connected ? 'XTS LIVE' : 'XTS OFF',
+                    Boolean(data?.data?.connected)
+                );
+            }
+            break;
+
+        case 'ping':
+            break;
+
+        default:
+            console.debug('âš ï¸ Unknown WS message type:', data.type, data);
+    }
+}
+
+
+==================== FILE: background\tasks.py ====================
+"""
+background/tasks.py â€” ACTION TASKS ONLY
+
+All snapshot computation (Greeks, PnL, IV) â†’ snapshot_service.py (port 8003)
+All order verification                      â†’ verifier_service.py  (port 8004)
+
+This module handles ONLY:
+  - WebSocket keepalive
+  - XTS socket status monitor
+  - DB cleanup
+  - start_verification_task()        â†’ ZMQ PUSH to verifier_service
+  - trigger_snapshot_and_broadcast() â†’ ZMQ PUSH to snapshot_service (DEBOUNCED)
+  - broadcast_message / broadcast_log (main app WebSocket)
+  - snapshot_bridge_loop()           â†’ WS bridge 8003 â†’ 5000
+  - marketdata_bridge_loop()         â†’ ZMQ SUB bridge marketdata PUB â†’ 5000
+                                       also caches chain_header_update for new WS clients
+"""
+import asyncio
+import zmq
+import zmq.asyncio
+import time as _time
+import json
+import httpx
+from typing import Set, List, Dict, Optional
+from utils.logger import logger
+from models.state import state
+from core.zmq_bus import FillsSubscriber
+from core.shared_memory import OrderSHM
+from utils.helpers import get_ist_now
+
+import config
+
+
+_websocket_clients: Set = set()
+
+SNAPSHOT_URL    = f"http://localhost:{getattr(config, 'SNAPSHOT_SERVICE_PORT', 8003)}"
+VERIFIER_URL    = f"http://localhost:{getattr(config, 'VERIFIER_SERVICE_PORT', 8004)}"
+MARKET_DATA_URL = f"http://localhost:{getattr(config, 'MARKET_DATA_PORT', 8001)}"
+
+# â”€â”€ Snapshot debounce â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+_snapshot_debounce:   Dict[str, float] = {}
+_SNAPSHOT_DEBOUNCE_S: float            = 1.0
+
+# â”€â”€ ZMQ Sockets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+_zmq_ctx:                     zmq.asyncio.Context = None
+_verifier_push_socket:        zmq.asyncio.Socket  = None
+_snapshot_force_push_socket:  zmq.asyncio.Socket  = None
+_snapshot_verify_push_socket: zmq.asyncio.Socket  = None
+
+
+def _get_verifier_socket() -> zmq.asyncio.Socket:
+    """Initializes and returns a singleton ZMQ PUSH socket to the verifier/reconciler."""
+    global _zmq_ctx, _verifier_push_socket
+    if _verifier_push_socket is None:
+        _zmq_ctx = zmq.asyncio.Context.instance()
+        _verifier_push_socket = _zmq_ctx.socket(zmq.PUSH)
+        _verifier_push_socket.connect(f"tcp://localhost:{config.ZMQ_VERIFIER_PULL_PORT}")
+        logger.info(f"ðŸ”Œ ZMQ PUSH socket connected to verifier/reconciler on port {config.ZMQ_VERIFIER_PULL_PORT}")
+    return _verifier_push_socket
+
+
+def _get_snapshot_force_push_socket() -> zmq.asyncio.Socket:
+    """Initializes and returns a singleton ZMQ PUSH socket to the snapshot service for force updates."""
+    global _zmq_ctx, _snapshot_force_push_socket
+    if _snapshot_force_push_socket is None:
+        _zmq_ctx = _zmq_ctx or zmq.asyncio.Context.instance()
+        _snapshot_force_push_socket = _zmq_ctx.socket(zmq.PUSH)
+        _snapshot_force_push_socket.connect(f"tcp://localhost:{config.ZMQ_SNAPSHOT_FORCE_PULL_PORT}")
+        logger.info(f"ðŸ”Œ ZMQ PUSH socket connected to snapshot service (force) on port {config.ZMQ_SNAPSHOT_FORCE_PULL_PORT}")
+    return _snapshot_force_push_socket
+
+
+def _get_snapshot_verify_push_socket() -> zmq.asyncio.Socket:
+    """Initializes and returns a singleton ZMQ PUSH socket to the snapshot service for verification notifications."""
+    global _zmq_ctx, _snapshot_verify_push_socket
+    if _snapshot_verify_push_socket is None:
+        _zmq_ctx = _zmq_ctx or zmq.asyncio.Context.instance()
+        _snapshot_verify_push_socket = _zmq_ctx.socket(zmq.PUSH)
+        _snapshot_verify_push_socket.connect(f"tcp://localhost:{config.ZMQ_SNAPSHOT_PULL_PORT}")
+        logger.info(f"ðŸ”Œ ZMQ PUSH socket connected to snapshot service (verify) on port {config.ZMQ_SNAPSHOT_PULL_PORT}")
+    return _snapshot_verify_push_socket
+
+
+# â”€â”€ WebSocket helpers (main app WS :5000) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+def set_websocket_clients(clients: Set):
+    global _websocket_clients
+    _websocket_clients = clients
+
+
+async def broadcast_message(message: dict):
+    if not _websocket_clients:
+        return
+    dead = set()
+    for client in list(_websocket_clients):
+        try:
+            await asyncio.wait_for(client.send_json(message), timeout=2.0)
+        except Exception:
+            dead.add(client)
+    for c in dead:
+        _websocket_clients.discard(c)
+
+
+async def broadcast_log(level: str, message: str):
+    await broadcast_message({
+        'type': 'log_message',
+        'data': {
+            'level':     level.upper(),
+            'message':   message,
+            'timestamp': get_ist_now().isoformat()
+        }
+    })
+
+
+# â”€â”€ Background loops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def websocket_keepalive_loop():
+    logger.info("ðŸ’“ WebSocket keep-alive loop started")
+    try:
+        while True:
+            await asyncio.sleep(30)
+            await broadcast_message({
+                "type":      "ping",
+                "timestamp": get_ist_now().timestamp()
+            })
+    except asyncio.CancelledError:
+        logger.info("ðŸ’“ WebSocket keep-alive stopped")
+
+
+async def monitor_xts_socket_status():
+    logger.info("ðŸš¦ XTS Socket Status Monitor started")
+    last_status      = None
+    last_data_source = None
+    while True:
+        try:
+            await asyncio.sleep(2)
+            cur_status      = state.socket_connected
+            cur_data_source = getattr(state, 'data_source', 'MICROSERVICE')
+            if cur_status != last_status or cur_data_source != last_data_source:
+                await broadcast_message({
+                    'type': 'xts_socket_status',
+                    'data': {
+                        'connected':  cur_status,
+                        'dataSource': cur_data_source,
+                    }
+                })
+                last_status      = cur_status
+                last_data_source = cur_data_source
+        except asyncio.CancelledError:
+            logger.info("ðŸš¦ XTS Socket Status Monitor stopped")
+            break
+        except Exception as e:
+            logger.error(f"Socket monitor error: {e}")
+
+
+async def cleanup_old_data():
+    logger.info("ðŸ§¹ Cleanup task started (runs every 6h)")
+    try:
+        while True:
+            await asyncio.sleep(21600)
+            if state.db:
+                state.db.cleanup_old_orders(days=30)
+                logger.info("âœ… DB cleanup complete")
+    except asyncio.CancelledError:
+        pass
+
+
+def get_live_pnl_data() -> dict:
+    """Used by /health API â€” simple aggregate from DB."""
+    try:
+        if not state.db:
+            return {}
+        straddles = state.db.get_active_straddles()
+        if not straddles:
+            return {
+                'total_pnl': 0.0, 'realized_pnl': 0.0,
+                'unrealized_pnl': 0.0, 'active_trades': 0
+            }
+        from trading.pnl_calculator import calculate_aggregate_pnl
+        return calculate_aggregate_pnl(straddles, state.prices)
+    except Exception as e:
+        logger.error(f"âŒ Live PnL error: {e}")
+        return {
+            'total_pnl': 0.0, 'realized_pnl': 0.0,
+            'unrealized_pnl': 0.0, 'active_trades': 0
+        }
+
+
+# â”€â”€ Marketdata bridge: marketdata_service ZMQ PUB â†’ UI clients (5000) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def marketdata_bridge_loop():
+    from api.websocket import update_chain_header_cache
+
+    pub_port = getattr(config, 'ZMQ_MARKETDATA_PUB_PORT', 5561)
+    ctx      = zmq.asyncio.Context.instance()
+
+    while True:
+        sub_socket = None
+        try:
+            sub_socket = ctx.socket(zmq.SUB)
+            sub_socket.setsockopt(zmq.RCVTIMEO,      5000)  # 5s â€” prevents silent hang
+            sub_socket.setsockopt(zmq.RECONNECT_IVL, 100)   # 100ms reconnect
+            sub_socket.connect(f"tcp://localhost:{pub_port}")
+
+            sub_socket.setsockopt(zmq.SUBSCRIBE, b'price_update')
+            sub_socket.setsockopt(zmq.SUBSCRIBE, b'chain_header_update')
+            sub_socket.setsockopt(zmq.SUBSCRIBE, b'option_chain_update')  # âœ…
+
+            await asyncio.sleep(0.05)   # slow-joiner fix
+
+            logger.info(
+                f"ðŸ“¡ Marketdata bridge connected to ZMQ PUB on port {pub_port} "
+                f"(topics: price_update, chain_header_update, option_chain_update)"
+            )
+
+            while True:
+                try:
+                    parts = await sub_socket.recv_multipart()
+                    if len(parts) < 2:
+                        continue
+
+                    msg_type = parts[0].decode('utf-8', errors='ignore')
+
+                    try:
+                        msg = json.loads(parts[1].decode('utf-8'))
+                    except Exception:
+                        continue
+
+                    if msg_type == 'chain_header_update':
+                        update_chain_header_cache(msg)
+                        await broadcast_message(msg)
+
+                    elif msg_type == 'option_chain_update':
+                        # Forward full chain refresh to frontend
+                        await broadcast_message(msg)
+
+                    elif msg_type == 'price_update':
+                        await broadcast_message(msg)
+
+                    else:
+                        await broadcast_message(msg)
+
+                except asyncio.CancelledError:
+                    raise
+                except zmq.Again:
+                    # RCVTIMEO expired â€” no messages, loop and try again
+                    continue
+                except Exception as e:
+                    logger.error(f"âŒ Marketdata bridge recv error: {e}", exc_info=True)
+                    await asyncio.sleep(0.1)
+
+        except asyncio.CancelledError:
+            logger.info("ðŸ“¡ Marketdata bridge cancelled.")
+            break
+        except Exception as e:
+            logger.warning(f"âš ï¸ Marketdata bridge disconnected ({e}). Reconnecting in 2s...")
+            await asyncio.sleep(2)
+        finally:
+            if sub_socket:
+                try:
+                    sub_socket.close(linger=0)
+                except Exception:
+                    pass
+
+
+# â”€â”€ Verification â€” delegates fully to verifier_service (port 8004) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def start_verification_task(
+    order_ids: List[str],
+    batch_name: str,
+    trade_uid: str
+) -> bool:
+    """Submit order IDs to verifier/reconciler service for async background verification via ZMQ."""
+    try:
+        socket  = _get_verifier_socket()
+        payload = {
+            'batch_name': batch_name,
+            'order_ids':  order_ids,
+            'trade_uid':  trade_uid,
+        }
+        await socket.send_json(payload)
+        logger.info(
+            f"ðŸ“¬ Verification queued via ZMQ: {batch_name} "
+            f"({len(order_ids)} orders)"
+        )
+        await broadcast_log(
+            'INFO',
+            f"[{batch_name}] Queued {len(order_ids)} orders for verification"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"âŒ Could not submit verification for {batch_name} via ZMQ: {e}", exc_info=True)
+    return False
+
+
+async def verify_orders_task(
+    order_ids: List[str],
+    batch_name: str = "BATCH",
+    trade_uid: str  = ""
+) -> Dict:
+    """
+    Submits a verification job and polls the shared memory state for the result.
+
+    Polling schedule (fast-path first, then slower cadence):
+      - First  5 polls: every 0.3s  â†’ resolves instant fills within ~1.5s
+      - Next   5 polls: every 0.5s  â†’ catches slower broker ACKs within ~4s total
+      - Final  5 polls: every 1.0s  â†’ timeout safety net, ~9s total max wait
+    Total max wait: (5Ã—0.3) + (5Ã—0.5) + (5Ã—1.0) = 1.5 + 2.5 + 5.0 = 9.0s
+    """
+    if not trade_uid:
+        uid_prefixes = ('ny', 'sx', 'bn', 'fn', 'mc')
+        parts        = batch_name.split('_')
+        found_uid    = next((part for part in parts if part.startswith(uid_prefixes)), None)
+        trade_uid    = found_uid if found_uid else (parts[1] if len(parts) > 1 else batch_name)
+
+    queued = await start_verification_task(order_ids, batch_name, trade_uid)
+    if not queued:
+        return {
+            'verified_success': [],
+            'verified_failed': [
+                {'order_id': oid, 'status': 'SUBMIT_FAILED'}
+                for oid in order_ids
+            ]
+        }
+
+    POLL_SCHEDULE = (
+        [(0.3, i) for i in range(5)] +
+        [(0.5, i) for i in range(5)] +
+        [(1.0, i) for i in range(5)]
+    )
+
+    order_shm        = None
+    verified_success = []
+    verified_failed  = []
+    still_pending    = list(order_ids)
+
+    try:
+        try:
+            order_shm = OrderSHM(create=False)
+        except FileNotFoundError:
+            logger.error("verify_orders_task: OrderSHM not found. Cannot verify orders.")
+            return {
+                'verified_success': [],
+                'verified_failed': [
+                    {'order_id': oid, 'status': 'VERIFY_ERROR'} for oid in order_ids
+                ]
+            }
+
+        for (sleep_s, _) in POLL_SCHEDULE:
+            if not still_pending:
+                break
+
+            await asyncio.sleep(sleep_s)
+
+            shm_data   = order_shm.read()
+            ORDER_DICT = shm_data.get('orders', {})
+
+            next_pending = []
+            for oid in still_pending:
+                order_info = ORDER_DICT.get(str(oid))
+                if not order_info:
+                    next_pending.append(oid)
+                    continue
+
+                status = order_info.get('status', 'UNKNOWN').upper()
+                if status in ('FILLED', 'COMPLETE', 'TRADED', 'EXECUTED'):
+                    verified_success.append(order_info.get('raw', {'AppOrderID': oid}))
+                elif status in ('CANCELLED', 'REJECTED', 'CANCELED'):
+                    verified_failed.append({
+                        'order_id': oid,
+                        'status':   status,
+                        'reason':   order_info.get('raw', {}).get('CancelRejectReason', 'Unknown')
+                    })
+                else:
+                    next_pending.append(oid)
+
+            still_pending = next_pending
+
+        if still_pending:
+            logger.warning(
+                f"âš ï¸ Verification timed out for {batch_name} after polling SHM. "
+                f"{len(still_pending)} orders unresolved."
+            )
+            for oid in still_pending:
+                verified_failed.append({'order_id': oid, 'status': 'TIMEOUT'})
+        else:
+            logger.info(
+                f"âœ… [{batch_name}] Verification complete via SHM: "
+                f"{len(verified_success)}/{len(order_ids)} filled"
+            )
+
+        # Notify snapshot service on completion
+        try:
+            snapshot_socket = _get_snapshot_verify_push_socket()
+            await snapshot_socket.send_json({
+                "command": "verification_complete",
+                "data": {
+                    "trade_uid":  trade_uid,
+                    "batch_name": batch_name,
+                    "success":    len(verified_failed) == 0
+                }
+            })
+            logger.debug(f"ðŸ“¬ Pushed verification_complete for {trade_uid} to snapshot service.")
+        except Exception as e:
+            logger.error(f"âŒ Failed to push verification_complete to snapshot service: {e}")
+
+        return {'verified_success': verified_success, 'verified_failed': verified_failed}
+
+    finally:
+        if order_shm:
+            order_shm.close()
+
+
+def start_verification_task_sync(
+    order_ids: List[str],
+    batch_name: str = "BATCH",
+    trade_uid: str  = ""
+) -> Optional[asyncio.Task]:
+    """BACKWARD COMPAT shim for fire-and-forget callers using asyncio.create_task."""
+    loop = asyncio.get_event_loop()
+    return loop.create_task(
+        start_verification_task(order_ids, batch_name, trade_uid)
+    )
+
+
+async def get_verification_result(batch_name: str) -> Optional[Dict]:
+    """Poll verifier_service for a completed result."""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{VERIFIER_URL}/api/verify/{batch_name}")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception as e:
+        logger.error(f"âŒ Could not fetch verification result: {e}")
+    return None
+
+
+# â”€â”€ Snapshot trigger â€” delegates to snapshot_service (port 8003) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def trigger_snapshot_and_broadcast(
+    trade_uid:       str,
+    trade_data:      dict  = None,
+    log_level:       str   = 'INFO',
+    bypass_debounce: bool  = False,
+):
+    """
+    ZMQ PUSH to snapshot_service /force-snapshot.
+    DEBOUNCED â€” collapsed into at most 1 request per trade per _SNAPSHOT_DEBOUNCE_S.
+    Pass bypass_debounce=True for critical one-shot events (fill confirmed, square-off).
+    """
+    global _snapshot_debounce
+    now  = _time.time()
+    last = _snapshot_debounce.get(trade_uid, 0.0)
+
+    if not bypass_debounce and (now - last) < _SNAPSHOT_DEBOUNCE_S:
+        return
+
+    _snapshot_debounce[trade_uid] = now
+
+    try:
+        snapshot_socket = _get_snapshot_force_push_socket()
+        await snapshot_socket.send_json({
+            'command': 'force_snapshot',
+            'data':    {'trade_uid': trade_uid, 'log_level': log_level}
+        })
+        logger.info(f"âš¡ Force snapshot triggered for {trade_uid} via ZMQ.")
+    except Exception as e:
+        logger.error(
+            f"âŒ Could not trigger force snapshot for {trade_uid} via ZMQ: {e}",
+            exc_info=True
+        )
+
+
+async def create_snapshot_for_trade(
+    trade_uid:  str,
+    trade_data: dict = None,
+    log_level:  str  = 'DEBUG'
+):
+    """BACKWARD COMPAT shim â€” routes to trigger_snapshot_and_broadcast."""
+    await trigger_snapshot_and_broadcast(trade_uid, trade_data, log_level)
+
+
+# â”€â”€ Snapshot bridge: snapshot_service WS (8003) â†’ UI clients (5000) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def snapshot_bridge_loop():
+    """
+    Connects to snapshot_service WebSocket and forwards all messages to UI clients.
+    Reconnects automatically on disconnect.
+    """
+    import websockets
+
+    snapshot_ws_url = (
+        f"ws://localhost:{getattr(config, 'SNAPSHOT_SERVICE_PORT', 8003)}/ws/snapshots"
+    )
+
+    while True:
+        try:
+            logger.info(f"ðŸ”Œ Snapshot bridge connecting to {snapshot_ws_url}...")
+            async with websockets.connect(snapshot_ws_url, ping_interval=20) as ws:
+                logger.info("âœ… Snapshot bridge connected â€” forwarding to UI clients.")
+                async for raw in ws:
+                    try:
+                        message = json.loads(raw)
+                        if not hasattr(state, 'trade_snapshots'):
+                            state.trade_snapshots = {}
+
+                        if message.get('type') == 'straddle_update':
+                            snap_data = message.get('data')
+                            if snap_data and 'trade_uid' in snap_data:
+                                state.trade_snapshots[snap_data['trade_uid']] = snap_data
+                        elif message.get('type') == 'pnl_batch_update':
+                            batch_data = message.get('data', [])
+                            for snap_data in batch_data:
+                                if snap_data and 'trade_uid' in snap_data:
+                                    state.trade_snapshots[snap_data['trade_uid']] = snap_data
+                    except Exception as e:
+                        logger.error(f"Bridge failed to parse/update state: {e}")
+
+                    if not _websocket_clients:
+                        continue
+                    dead = set()
+                    for client in list(_websocket_clients):
+                        try:
+                            await asyncio.wait_for(client.send_text(raw), timeout=2.0)
+                        except Exception:
+                            dead.add(client)
+                    for c in dead:
+                        _websocket_clients.discard(c)
+
+        except asyncio.CancelledError:
+            logger.info("ðŸ”Œ Snapshot bridge cancelled.")
+            break
+        except Exception as e:
+            logger.warning(f"âš ï¸ Snapshot bridge disconnected ({e}). Reconnecting in 2s...")
+            await asyncio.sleep(2)
+
+
+# â”€â”€ No-op stubs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def create_trade_snapshots_loop(interval_seconds: float = 0.5):
+    """No-op stub. All snapshot computation is in snapshot_service.py (port 8003)."""
+    logger.info(
+        "ðŸ“¸ Snapshot loop fully delegated to snapshot_service.py (port 8003)."
+    )
+
+
+async def update_order_book_loop():
+    """No-op stub. Order book managed by order_book_service.py (port 8002)."""
+    logger.info(
+        "ðŸ“‹ Order book loop delegated to order_book_service.py (port 8002)."
+    )
+
+
+async def reconciliation_listener():
+    """
+    Listens for FILLS_UPDATED signal from reconciler.
+    On signal: reads OrderSHM â†’ updates in-process state.
+    """
+    order_shm        = None
+    fills_subscriber = None
+    try:
+        while order_shm is None:
+            try:
+                order_shm = OrderSHM(create=False)
+                logger.info("âœ… Fills listener attached to OrderSHM.")
+            except FileNotFoundError:
+                logger.warning(
+                    "Waiting for 'order_shm' to be created by reconciler service... retrying in 2s."
+                )
+                await asyncio.sleep(2)
+
+        fills_subscriber = FillsSubscriber()
+        logger.info("âœ… Fills listener started, connected to SHM and ZMQ.")
+
+        while True:
+            await fills_subscriber.recv()
+            shm_data = order_shm.read()
+            if hasattr(state, 'shared_data') and state.shared_data:
+                orders   = shm_data.get('orders', {})
+                verified = shm_data.get('verified', {})
+                state.shared_data.order_book_cache.clear()
+                state.shared_data.order_book_cache.update(orders)
+                state.shared_data.verified_trades.clear()
+                state.shared_data.verified_trades.update(verified)
+                logger.debug(
+                    f"Synced {len(orders)} orders and {len(verified)} verified trades from SHM"
+                )
+    except Exception as e:
+        logger.error(f"âŒ Fills listener error: {e}", exc_info=True)
+    finally:
+        if order_shm:        order_shm.close()
+        if fills_subscriber: fills_subscriber.close()
+
+
+==================== FILE: models\state.py ====================
+"""
+Global State Management
+
+This module provides a singleton `state` object to manage shared application state
+across different parts of the main process and to provide a consistent interface
+for state access in worker processes.
+"""
+
+import time
+from typing import Dict, Optional, Any
+from utils.logger import logger
+
+
+class SharedDataManager:
+    pass
+
+
+class DashboardState:
+    """
+    Global state object for the application.
+    This is a singleton-style shared runtime cache/state holder.
+    """
+
+    def __init__(self):
+        self.db = None
+        self.xt_i = None
+
+        # Connectivity / source metadata
+        self.socket_connected: bool = False
+        self.data_source: str = "UNKNOWN"
+
+        # Subscriptions / token metadata
+        self.subscribed_tokens: set[int] = set()
+        self.token_segment_map: Dict[int, int] = {}
+
+        # Verification / task runtime caches
+        self.verification_results: Dict[str, Any] = {}
+        self.verification_tasks: Dict[str, Any] = {}
+        self.cancellation_flags: Dict[str, Any] = {}
+        self.trade_snapshots: Dict[str, Any] = {}
+        self.temp_order_cache: Dict[str, Any] = {}
+        self.trade_data_cache: Dict[str, Any] = {}
+        self.closing_trades: set[str] = set()
+
+        # --- MULTIPROCESSING / shared manager integration ---
+        self.shared_data: Optional["SharedDataManager"] = None
+        self.trade_processes: Dict[str, Any] = {}
+
+        # Shared/proxy caches
+        self.prices: Dict[int, float] = {}
+        self.option_chains: Dict[str, Dict[str, Any]] = {}
+
+        # Optional runtime objects used by older codepaths
+        self.broadcast_queue = None
+        self.broadcastqueue = None
+
+    # ------------------------------------------------------------------
+    # Price cache
+    # ------------------------------------------------------------------
+    def get_price(self, token: int) -> Optional[float]:
+        """
+        Safely gets a price from the shared data manager or local cache.
+        This is the single source of truth for price lookups.
+        """
+        if token is None:
+            return None
+
+        try:
+            token = int(token)
+        except (ValueError, TypeError):
+            return None
+
+        if self.shared_data:
+            try:
+                return self.shared_data.get_price(token)
+            except Exception as e:
+                logger.warning(f"SharedDataManager.get_price failed for token {token}: {e}")
+
+        if isinstance(self.prices, dict):
+            return self.prices.get(token)
+
+        logger.warning(
+            f"Could not get price for token {token}: "
+            "SharedDataManager not available and self.prices is not a dict."
+        )
+        return None
+
+    def update_price(self, token: int, price: float):
+        """
+        Safely updates a price in the shared data manager or local cache.
+        """
+        if token is None:
+            return
+
+        try:
+            token = int(token)
+            price = float(price)
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid price update ignored for token={token}, price={price}")
+            return
+
+        if self.shared_data:
+            try:
+                self.shared_data.update_price(token, price)
+                return
+            except Exception as e:
+                logger.warning(f"SharedDataManager.update_price failed for token {token}: {e}")
+
+        if not isinstance(self.prices, dict):
+            self.prices = {}
+
+        self.prices[token] = price
+
+    def bulk_update_prices(self, price_map: Dict[int, float]):
+        """
+        Bulk update token prices into cache.
+        """
+        if not price_map:
+            return
+
+        for token, price in price_map.items():
+            self.update_price(token, price)
+
+    def clear_prices(self):
+        """
+        Clears local price cache.
+        """
+        self.prices = {}
+
+    # ------------------------------------------------------------------
+    # Option chain cache
+    # ------------------------------------------------------------------
+    def get_option_chain(self, symbol: str) -> Optional[Dict]:
+        """
+        Safely gets an option chain from the shared data manager or local cache.
+        """
+        if not symbol:
+            return None
+
+        symbol = symbol.upper()
+
+        if self.shared_data and hasattr(self.shared_data, "get_option_chain"):
+            try:
+                return self.shared_data.get_option_chain(symbol)
+            except Exception as e:
+                logger.warning(f"SharedDataManager.get_option_chain failed for {symbol}: {e}")
+
+        if not isinstance(self.option_chains, dict):
+            self.option_chains = {}
+
+        return self.option_chains.get(symbol)
+
+    def update_option_chain(self, symbol: str, chain_data: Dict):
+        """
+        Safely updates an option chain in the shared data manager or local cache.
+        """
+        if not symbol or not isinstance(chain_data, dict):
+            return
+
+        symbol = symbol.upper()
+
+        if self.shared_data and hasattr(self.shared_data, "update_option_chain"):
+            try:
+                self.shared_data.update_option_chain(symbol, chain_data)
+                return
+            except Exception as e:
+                logger.warning(f"SharedDataManager.update_option_chain failed for {symbol}: {e}")
+
+        if not isinstance(self.option_chains, dict):
+            self.option_chains = {}
+
+        self.option_chains[symbol] = chain_data
+
+    def clear_option_chain(self, symbol: str):
+        """
+        Clears a single symbol chain from cache.
+        """
+        if not symbol:
+            return
+
+        symbol = symbol.upper()
+
+        if isinstance(self.option_chains, dict):
+            self.option_chains.pop(symbol, None)
+
+    def clear_all_option_chains(self):
+        """
+        Clears all cached option chains.
+        """
+        self.option_chains = {}
+
+    def is_option_chain_stale(self, symbol: str, max_age: int = 5) -> bool:
+        """
+        Checks if the cached option chain for a symbol is older than max_age seconds.
+        """
+        if not symbol:
+            return True
+
+        symbol = symbol.upper()
+
+        if not isinstance(self.option_chains, dict):
+            return True
+
+        chain_data = self.option_chains.get(symbol)
+        if not chain_data:
+            return True
+
+        last_update_timestamp = chain_data.get("timestamp")
+        if not last_update_timestamp:
+            logger.warning(f"Chain for {symbol} is missing a timestamp. Assuming stale.")
+            return True
+
+        try:
+            age = time.time() - float(last_update_timestamp)
+        except (ValueError, TypeError):
+            logger.warning(f"Chain for {symbol} has invalid timestamp. Assuming stale.")
+            return True
+
+        is_stale = age > max_age
+        if is_stale:
+            logger.info(f"Chain for {symbol} is stale (age: {age:.2f}s > {max_age}s).")
+        return is_stale
+
+    # ------------------------------------------------------------------
+    # Subscriptions / mappings
+    # ------------------------------------------------------------------
+    def add_subscription(self, token: int):
+        try:
+            self.subscribed_tokens.add(int(token))
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid subscription token ignored: {token}")
+
+    def remove_subscription(self, token: int):
+        try:
+            self.subscribed_tokens.discard(int(token))
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid subscription token ignored: {token}")
+
+    def set_token_segment(self, token: int, segment: int):
+        try:
+            self.token_segment_map[int(token)] = int(segment)
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid token-segment mapping ignored: token={token}, segment={segment}")
+
+    def get_token_segment(self, token: int) -> Optional[int]:
+        try:
+            return self.token_segment_map.get(int(token))
+        except (ValueError, TypeError):
+            return None
+
+    # ------------------------------------------------------------------
+    # Order / trade helpers
+    # ------------------------------------------------------------------
+    def map_order_to_trade(self, order_id: str, trade_uid: str):
+        """
+        Maps an order id to a trade uid inside temp_order_cache.
+        """
+        if not order_id or not trade_uid:
+            return
+
+        self.temp_order_cache[str(order_id)] = str(trade_uid)
+
+    def get_trade_for_order(self, order_id: str) -> Optional[str]:
+        if not order_id:
+            return None
+        return self.temp_order_cache.get(str(order_id))
+
+    # ------------------------------------------------------------------
+    # Backward-compatible aliases for older codepaths
+    # ------------------------------------------------------------------
+    def getprice(self, token: int) -> Optional[float]:
+        return self.get_price(token)
+
+    def updateprice(self, token: int, price: float):
+        self.update_price(token, price)
+
+    def getoptionchain(self, symbol: str) -> Optional[Dict]:
+        return self.get_option_chain(symbol)
+
+    def updateoptionchain(self, symbol: str, chain_data: Dict):
+        self.update_option_chain(symbol, chain_data)
+
+    def isoptionchainstale(self, symbol: str, max_age: int = 5) -> bool:
+        return self.is_option_chain_stale(symbol, max_age=max_age)
+
+    def addsubscription(self, token: int):
+        self.add_subscription(token)
+
+    # Older code sometimes accesses these spellings directly
+    @property
+    def socketconnected(self) -> bool:
+        return self.socket_connected
+
+    @socketconnected.setter
+    def socketconnected(self, value: bool):
+        self.socket_connected = bool(value)
+
+    @property
+    def optionchains(self) -> Dict[str, Dict[str, Any]]:
+        return self.option_chains
+
+    @optionchains.setter
+    def optionchains(self, value):
+        self.option_chains = value if isinstance(value, dict) else {}
+
+    @property
+    def broadcastqueue(self):
+        return self.broadcast_queue
+
+    @broadcastqueue.setter
+    def broadcastqueue(self, value):
+        self.broadcast_queue = value
+
+
+# Create a single global instance
+state = DashboardState()
+
+
+==================== FILE: trading\data_client.py ====================
+import asyncio
+import httpx
+from typing import Dict, Optional, List
+
+from utils.logger import logger
+from models.state import state
+import config
+
+
+# â”€â”€ Service URLs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+MARKET_DATA_SERVICE_URL = f"http://localhost:{config.MARKET_DATA_PORT}"
+SNAPSHOT_SERVICE_URL    = f"http://localhost:{getattr(config, 'SNAPSHOT_SERVICE_PORT', 8003)}"
+
+
+# â”€â”€ Option chain â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def get_option_chain_from_service(symbol: str) -> Optional[Dict]:
+    """Fetches option chain data for a given symbol from the Market Data Microservice."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{MARKET_DATA_SERVICE_URL}/option-chain/{symbol.upper()}")
+            response.raise_for_status()
+            data = response.json()
+            if data.get('success'):
+                return data.get('data')
+            logger.error(f"Market Data Service error for {symbol}: {data.get('error')}")
+            return None
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error fetching option chain for {symbol}: {e}")
+    except httpx.RequestError as e:
+        logger.error(f"Network error fetching option chain for {symbol}: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching option chain for {symbol}: {e}", exc_info=True)
+    return None
+
+
+# â”€â”€ Spot details â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def get_spot_details_from_service(symbol: str) -> Optional[Dict]:
+    """Fetches spot details for a given symbol from the Market Data Microservice."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{MARKET_DATA_SERVICE_URL}/spot-details/{symbol.upper()}")
+            response.raise_for_status()
+            data = response.json()
+            if data.get('success'):
+                return data.get('data')
+            logger.error(f"Market Data Service error for {symbol}: {data.get('error')}")
+            return None
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error fetching spot details for {symbol}: {e}")
+    except httpx.RequestError as e:
+        logger.error(f"Network error fetching spot details for {symbol}: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching spot details for {symbol}: {e}", exc_info=True)
+    return None
+
+
+# â”€â”€ Single LTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def get_ltp_from_service(token: int) -> float:
+    """Fetches LTP for a given token from the Market Data Microservice."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{MARKET_DATA_SERVICE_URL}/ltp/{token}")
+            response.raise_for_status()
+            data = response.json()
+            if data.get('success'):
+                return float(data.get('ltp', 0.0))
+            logger.warning(f"LTP error for token {token}: {data.get('error')}")
+            return 0.0
+    except httpx.RequestError as e:
+        logger.warning(f"Network error fetching LTP for {token}: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching LTP for {token}: {e}", exc_info=True)
+    return 0.0
+
+
+# â”€â”€ Bulk LTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def get_bulk_ltp_from_service(tokens: List[int]) -> Dict[int, float]:
+    """Fetches LTP for multiple tokens from the Market Data Microservice."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MARKET_DATA_SERVICE_URL}/bulk-ltp",
+                json={"tokens": tokens}
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data.get('success'):
+                return {int(k): float(v) for k, v in data.get('data', {}).items()}
+            logger.warning(f"Bulk LTP error: {data.get('error')}")
+            return {}
+    except httpx.RequestError as e:
+        logger.warning(f"Network error fetching bulk LTP: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching bulk LTP: {e}", exc_info=True)
+    return {}
+
+
+# â”€â”€ Market depth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def get_market_depth_from_service(token: int) -> Optional[Dict]:
+    """Fetches market depth for a given token from the Market Data Microservice."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{MARKET_DATA_SERVICE_URL}/market-depth/{token}")
+            response.raise_for_status()
+            data = response.json()
+            if data.get('success'):
+                return data.get('data')
+            logger.warning(f"Market depth error for token {token}: {data.get('error')}")
+            return None
+    except httpx.RequestError as e:
+        logger.warning(f"Network error fetching market depth for {token}: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching market depth for {token}: {e}", exc_info=True)
+    return None
+
+
+async def get_bulk_market_depth_from_service(instruments: List[Dict]) -> Dict[int, Dict]:
+    """Fetches market depth for multiple tokens from the Market Data Microservice."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MARKET_DATA_SERVICE_URL}/bulk-market-depth",
+                json={"instruments": instruments}
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data.get('success'):
+                return {int(k): v for k, v in data.get('data', {}).items()}
+            logger.warning(f"Bulk market depth error: {data.get('error')}")
+            return {}
+    except httpx.RequestError as e:
+        logger.warning(f"Network error fetching bulk market depth: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching bulk market depth: {e}", exc_info=True)
+    return {}
+
+
+# â”€â”€ Snapshot service â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def get_snapshot_from_service(trade_uid: str) -> Optional[Dict]:
+    """Fetches the latest computed snapshot for a trade from snapshot_service."""
+    try:
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            resp = await client.get(f"{SNAPSHOT_SERVICE_URL}/api/snapshots/{trade_uid}")
+            if resp.status_code == 200:
+                return resp.json()
+            logger.debug(f"Snapshot not found for {trade_uid} (status {resp.status_code})")
+    except Exception as e:
+        logger.debug(f"Could not fetch snapshot for {trade_uid}: {e}")
+    return None
+
+
+# â”€â”€ Subscriptions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def subscribe_active_straddles():
+    """Subscribes active straddle instruments by sending tokens to the Market Data Microservice."""
+    if not state.db:
+        logger.error("âŒ Database not initialized for active straddle subscription.")
+        return
+    try:
+        straddles = state.db.get_active_straddles()
+        if not straddles:
+            logger.info("â„¹ï¸ No active straddles to subscribe.")
+            return
+
+        tokens_to_subscribe = set()
+        for straddle in straddles:
+            for key in ('ce_token', 'pe_token', 'fut_token'):
+                if straddle.get(key):
+                    tokens_to_subscribe.add(int(straddle[key]))
+
+        if not tokens_to_subscribe:
+            logger.info("No instruments found in active straddles to subscribe.")
+            return
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MARKET_DATA_SERVICE_URL}/subscribe",
+                json={"tokens": list(tokens_to_subscribe)},
+                timeout=5.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data.get('success'):
+                for token in tokens_to_subscribe:
+                    state.add_subscription(token)
+                logger.info(f"âœ… Subscribed {len(tokens_to_subscribe)} instruments to Market Data Service.")
+            else:
+                logger.error(f"âŒ Subscription failed: {data.get('error')}")
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error during straddle subscription: {e}")
+    except httpx.RequestError as e:
+        logger.error(f"Network error during straddle subscription: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error during straddle subscription: {e}", exc_info=True)
+
+
+# â”€â”€ Price sync loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async def sync_prices_loop():
+    """Continuously fetches prices from the Market Data Microservice and updates local state."""
+    logger.info("ðŸ”„ Starting price sync loop with Market Data Microservice.")
+    while True:
+        try:
+            subscribed_tokens = list(state.subscribed_tokens)
+            if not subscribed_tokens:
+                logger.debug("No tokens subscribed for price sync. Waiting...")
+                await asyncio.sleep(5)
+                continue
+
+            prices_data = await get_bulk_ltp_from_service(subscribed_tokens)
+            if prices_data:
+                for token, ltp in prices_data.items():
+                    state.update_price(token, float(ltp))
+                logger.debug(f"Synced {len(prices_data)} prices from Market Data Service.")
+
+            await asyncio.sleep(1)
+
+        except asyncio.CancelledError:
+            logger.info("Price sync loop cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Unexpected error in price sync loop: {e}", exc_info=True)
+            await asyncio.sleep(5)
+
+
+# â”€â”€ HTTP client lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+_http_client: Optional[httpx.AsyncClient] = None
+
+def set_http_client_instance(host: str, port: int):
+    """
+    Initializes the shared HTTP client pointed at the market data service.
+    Called once at startup by main.py after services are ready.
+    Also dynamically updates MARKET_DATA_SERVICE_URL to use the actual host.
+    """
+    global _http_client, MARKET_DATA_SERVICE_URL
+    MARKET_DATA_SERVICE_URL = f"http://{host}:{port}"
+    _http_client = httpx.AsyncClient(
+        base_url=MARKET_DATA_SERVICE_URL,
+        timeout=2.0
+    )
+    logger.info(f"âœ… Trading data client initialized â†’ {MARKET_DATA_SERVICE_URL}")
+
+
+==================== FILE: trading\chain_provider.py ====================
+"""
+Option Chain Provider Service
+Supports: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY (NSE) and SENSEX, BANKEX (BSE)
+This module acts as the core of the market data service.
+"""
+import time
+import json
+import threading
+import math
+from typing import Dict, Optional, List
+from datetime import datetime
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from utils.logger import logger
+from utils.greeks import calculate_all_greeks, calculate_greeks_from_iv
+import config
+from copy import deepcopy
+from datetime import datetime
+
+from models.state import state
+from zoneinfo import ZoneInfo
+from utils.helpers import calculate_dte, get_ist_now
+IST = ZoneInfo("Asia/Kolkata")
+from copy import deepcopy
+# Global XTS instances (set by data_processor)
+from utils.helpers import get_ist_now
+xt_m = None
+md_socket = None
+
+expiry_cache: Dict[str, Dict] = {}
+
+_spot_details_cache: Dict[str, Dict] = {}
+_spot_details_cooldown_seconds = 1.0
+
+_chain_build_locks: Dict[str, threading.Lock] = {}
+
+# Key: (symbol, expiry_date, strike, option_type) -> Value: token (int)
+_STATIC_TOKEN_CACHE: Dict[tuple, int] = {}
+
+
+def set_xts_instances(market_api, socket_client):
+    """Set global XTS instances"""
+    global xt_m, md_socket
+    xt_m = market_api
+    md_socket = socket_client
+    logger.info("âœ… XTS instances set in marketdata.chain_provider module")
+
+
+def get_xts_market_api():
+    """Returns the global market data API instance."""
+    return xt_m
+
+
+def _call_with_retry(func, *args, **kwargs):
+    """
+    Wrapper to retry a synchronous XTS call that might fail due to network issues.
+    """
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except (UnboundLocalError, Exception) as e:
+            logger.warning(f"âš ï¸ Network/API error in {func.__name__}: {e}. Retrying... (Attempt {attempt + 1}/{max_retries})")
+            if attempt + 1 == max_retries:
+                logger.error(f"âŒ All {max_retries} retries failed for {func.__name__}.")
+                return {'type': 'error', 'description': f'All retries failed for {func.__name__}'}
+            time.sleep(0.1 * (attempt + 1))
+    return {'type': 'error', 'description': 'Retry logic failed unexpectedly'}
+
+
+# Symbol configurations
+SYMBOL_CONFIG: Dict[str, Dict] = {
+    'NIFTY': {
+        'segment': 2,
+        'cash_index_segment': 1,
+        'cash_index_token': 26000,
+        'gap': 50,
+        'series_fut': 'FUTIDX',
+        'series_opt': 'OPTIDX',
+        'min_roll_threshold': 30,
+        'max_order_qty': 1800,
+        'min_future_price': 10000
+    },
+    'BANKNIFTY': {
+        'segment': 2,
+        'cash_index_segment': 1,
+        'cash_index_token': 26001,
+        'gap': 100,
+        'series_fut': 'FUTIDX',
+        'series_opt': 'OPTIDX',
+        'min_roll_threshold': 60,
+        'max_order_qty': 900,
+        'min_future_price': 20000
+    },
+    'FINNIFTY': {
+        'segment': 2,
+        'cash_index_segment': 1,
+        'cash_index_token': 26034,
+        'gap': 50,
+        'series_fut': 'FUTIDX',
+        'series_opt': 'OPTIDX',
+        'min_roll_threshold': 30,
+        'max_order_qty': 1800,
+        'min_future_price': 10000
+    },
+    'MIDCPNIFTY': {
+        'segment': 2,
+        'cash_index_segment': 1,
+        'cash_index_token': 26121,
+        'gap': 25,
+        'series_fut': 'FUTIDX',
+        'series_opt': 'OPTIDX',
+        'min_roll_threshold': 20,
+        'max_order_qty': 4200,
+        'min_future_price': 5000
+    },
+    'SENSEX': {
+        'segment': 12,
+        'cash_index_segment': 11,
+        'cash_index_token': 26065,
+        'gap': 100,
+        'series_fut': 'IF',
+        'series_opt': 'IO',
+        'min_roll_threshold': 65,
+        'max_order_qty': 1000,
+        'min_future_price': 50000
+    },
+    'BANKEX': {
+        'segment': 12,
+        'cash_index_segment': 11,
+        'cash_index_token': 26118,
+        'gap': 100,
+        'series_fut': 'IF',
+        'series_opt': 'IO',
+        'min_roll_threshold': 60,
+        'max_order_qty': 4000,
+        'min_future_price': 20000
+    }
+}
+
+
+def get_ltp(token: int, exchange_segment: int = config.EXCHANGE_NSEFO, ignore_cache: bool = False) -> float:
+    """Get LTP from cache or fetch via REST if not available."""
+    try:
+        if not xt_m or not token:
+            return 0.0
+
+        token = int(token)
+
+        if not ignore_cache:
+            cached = state.get_price(token)
+            if cached is not None and cached > 0:
+                return cached
+
+        logger.info(f"ðŸ’° LTP for {token} not in cache, fetching via REST...")
+        instruments = [{
+            "exchangeSegment": exchange_segment,
+            "exchangeInstrumentID": token
+        }]
+
+        is_cash_segment = exchange_segment in [1, 11]
+
+        if is_cash_segment:
+            # âœ… FIX: Cash indices need Touchline (1501), not 1512
+            response = _call_with_retry(
+                xt_m.get_quote,
+                Instruments=instruments,
+                xtsMessageCode=1501,
+                publishFormat='JSON'
+            )
+        else:
+            response = _call_with_retry(
+                xt_m.get_quote,
+                Instruments=instruments,
+                xtsMessageCode=config.MESSAGE_CODE_LTP,
+                publishFormat='JSON'
+            )
+
+        list_quotes = []
+        if response and response.get('type') == 'success':
+            result = response.get('result', {})
+            list_quotes = result.get('listQuotes', [])
+
+        # âœ… FIX: For BSE FO (segment 12), fallback to 1501 if 1512 returns 0
+        if not list_quotes and exchange_segment == 12:
+            logger.warning(f"âš ï¸ 1512 returned no data for BSE FO token {token}. Retrying with 1501...")
+            response = _call_with_retry(
+                xt_m.get_quote,
+                Instruments=instruments,
+                xtsMessageCode=1501,
+                publishFormat='JSON'
+            )
+            if response and response.get('type') == 'success':
+                result = response.get('result', {})
+                list_quotes = result.get('listQuotes', [])
+
+        if list_quotes:
+            quote_str = list_quotes[0]
+            quote = json.loads(quote_str) if isinstance(quote_str, str) else quote_str
+            ltp = float(
+                quote.get('LastTradedPrice') or
+                quote.get('Touchline', {}).get('LastTradedPrice') or
+                quote.get('Close') or
+                0.0
+            )
+            if ltp > 0:
+                state.update_price(token, ltp)
+                logger.info(f"ðŸ’° Fetched LTP for {token}: â‚¹{ltp:.2f}")
+                return ltp
+
+        # OHLC fallback for cash indices
+        if is_cash_segment:
+            logger.warning(f"âš ï¸ get_quote failed for cash index {token}. Trying get_ohlc fallback...")
+            try:
+                now = get_ist_now()
+                start_time = (now - timedelta(minutes=5)).strftime('%b %d %Y %H%M%S')
+                end_time = now.strftime('%b %d %Y %H%M%S')
+                segment_name = "NSECM" if exchange_segment == 1 else "BSECM"
+
+                ohlc_resp = _call_with_retry(
+                    xt_m.get_ohlc,
+                    exchangeSegment=segment_name,
+                    exchangeInstrumentID=token,
+                    startTime=start_time,
+                    endTime=end_time,
+                    compressionValue=1
+                )
+
+                if ohlc_resp and ohlc_resp.get('type') == 'success':
+                    result = ohlc_resp.get('result', {})
+                    ohlc_data_str = result.get('dataPoints', '')
+                    if ohlc_data_str:
+                        last_candle = ohlc_data_str.strip().split('\n')[-1]
+                        parts = last_candle.split('|')
+                        if len(parts) >= 5:
+                            ltp = float(parts[4])
+                            if ltp > 0:
+                                state.update_price(token, ltp)
+                                logger.info(f"ðŸ’° Fetched LTP for {token} via get_ohlc fallback: â‚¹{ltp:.2f}")
+                                return ltp
+            except Exception as ohlc_e:
+                logger.error(f"âŒ OHLC fallback failed for {token}: {ohlc_e}")
+
+        logger.warning(f"âš ï¸  Failed to fetch LTP for {token} via REST. Response: {response}")
+
+        try:
+            sub_code = 1501 if is_cash_segment or exchange_segment == 12 else config.MESSAGE_CODE_LTP
+            xt_m.send_subscription(instruments, sub_code)
+            state.add_subscription(token)
+        except Exception as sub_e:
+            logger.warning(f"âš ï¸  LTP subscription warning for {token}: {sub_e}")
+
+        return 0.0
+
+    except Exception as e:
+        logger.error(f"Get LTP error for token {token}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return 0.0
+
+
+def get_market_depth(token: int, exchange_segment: int = config.EXCHANGE_NSEFO) -> Optional[Dict]:
+    """Get L1 market depth (best bid/ask) via REST."""
+    try:
+        if not xt_m or not token:
+            return None
+
+        token = int(token)
+        instruments = [{
+            "exchangeSegment": exchange_segment,
+            "exchangeInstrumentID": token
+        }]
+
+        response = _call_with_retry(
+            xt_m.get_quote,
+            Instruments=instruments,
+            xtsMessageCode=1501,
+            publishFormat='JSON'
+        )
+
+        if response and response.get('type') == 'success':
+            result = response.get('result', {})
+            list_quotes = result.get('listQuotes', [])
+            if list_quotes:
+                quote_str = list_quotes[0]
+                quote = json.loads(quote_str) if isinstance(quote_str, str) else quote_str
+                bid_info = quote.get('BidInfo', {})
+                ask_info = quote.get('AskInfo', {})
+                bid_price = float(bid_info.get('Price', 0.0))
+                ask_price = float(ask_info.get('Price', 0.0))
+                if bid_price > 0 and ask_price > 0:
+                    logger.info(f"ðŸ’° Fetched Depth for {token}: Bid={bid_price:.2f}, Ask={ask_price:.2f}")
+                    return {'bid_price': bid_price, 'ask_price': ask_price}
+
+        logger.warning(f"âš ï¸  Failed to fetch market depth for {token} via REST. Response: {response}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Get Market Depth error for token {token}: {e}", exc_info=True)
+        return None
+
+
+def get_bulk_ltp(tokens: List[int], exchange_segment: int = config.EXCHANGE_NSEFO) -> Dict[int, float]:
+    """Get LTP for multiple instruments via a single REST call."""
+    ltp_map = {}
+    try:
+        if not xt_m or not tokens:
+            return {}
+
+        instruments = [{"exchangeSegment": exchange_segment, "exchangeInstrumentID": t} for t in tokens]
+
+        response = _call_with_retry(
+            xt_m.get_quote,
+            Instruments=instruments,
+            xtsMessageCode=config.MESSAGE_CODE_LTP,
+            publishFormat='JSON'
+        )
+
+        if response and response.get('type') == 'success':
+            result = response.get('result', {})
+            list_quotes = result.get('listQuotes', [])
+            if list_quotes:
+                for quote_str in list_quotes:
+                    quote = json.loads(quote_str) if isinstance(quote_str, str) else quote_str
+                    token = quote.get('ExchangeInstrumentID')
+                    ltp = float(quote.get('LastTradedPrice', 0.0))
+                    if token and ltp > 0:
+                        ltp_map[int(token)] = ltp
+
+        if len(ltp_map) < len(instruments):
+            logger.warning(f"âš ï¸  Bulk LTP fetch: Got data for {len(ltp_map)}/{len(instruments)} instruments.")
+
+        return ltp_map
+    except Exception as e:
+        logger.error(f"Get Bulk LTP error: {e}", exc_info=True)
+        return {}
+
+def _stamp_now() -> str:
+    return datetime.now(IST).isoformat()
+
+
+def get_bulk_market_depth(instruments: List[Dict]) -> Dict[int, Dict]:
+    """Get L1 market depth (best bid/ask) for multiple instruments via a single REST call."""
+    depth_map = {}
+    try:
+        if not xt_m or not instruments:
+            return {}
+
+        response = _call_with_retry(
+            xt_m.get_quote,
+            Instruments=instruments,
+            xtsMessageCode=1501,
+            publishFormat='JSON'
+        )
+
+        if response and response.get('type') == 'success':
+            result = response.get('result', {})
+            list_quotes = result.get('listQuotes', [])
+            if list_quotes:
+                for quote_str in list_quotes:
+                    quote = json.loads(quote_str) if isinstance(quote_str, str) else quote_str
+                    token = quote.get('ExchangeInstrumentID')
+                    bid_info = quote.get('BidInfo', {})
+                    ask_info = quote.get('AskInfo', {})
+                    bid_price = float(bid_info.get('Price', 0.0))
+                    ask_price = float(ask_info.get('Price', 0.0))
+                    if token and bid_price > 0 and ask_price > 0:
+                        depth_map[token] = {'bid_price': bid_price, 'ask_price': ask_price}
+
+        if len(depth_map) < len(instruments):
+            logger.warning(f"âš ï¸  Bulk depth fetch: Got data for {len(depth_map)}/{len(instruments)} instruments.")
+
+        return depth_map
+
+    except Exception as e:
+        logger.error(f"Get Bulk Market Depth error: {e}", exc_info=True)
+        return {}
+def _calculate_row_greeks(strike, fut_ltp, dte, ce_ltp, pe_ltp, risk_free_rate=0.0):
+    """Helper to calculate greeks for a strike row with ITM IV adjustment."""
+    ce_greeks = calculate_all_greeks("call", strike, fut_ltp, dte, ce_ltp, risk_free_rate) if ce_ltp > 0 else {}
+    pe_greeks = calculate_all_greeks("put",  strike, fut_ltp, dte, pe_ltp, risk_free_rate) if pe_ltp > 0 else {}
+
+    is_ce_itm = strike < fut_ltp
+    is_pe_itm = strike > fut_ltp
+
+    if is_ce_itm and pe_greeks.get('iv', 0) > 0:
+        otm_iv = pe_greeks.get('iv')
+        ce_greeks = calculate_greeks_from_iv("call", strike, fut_ltp, dte, otm_iv, risk_free_rate)
+    elif is_pe_itm and ce_greeks.get('iv', 0) > 0:
+        otm_iv = ce_greeks.get('iv')
+        pe_greeks = calculate_greeks_from_iv("put", strike, fut_ltp, dte, otm_iv, risk_free_rate)
+
+    return ce_greeks, pe_greeks
+ 
+def get_spot_details(symbol: str, target_expiry: str = None, use_cache_only: bool = False) -> Optional[Dict]:
+    """
+    Calculates the definitive spot price (cash index) and related details.
+    REST is the source of truth for spot price on every call.
+    Only expiry metadata may be reused from cache.
+    """
+    symbol_upper = symbol.upper()
+
+    try:
+        if not xt_m:
+            logger.error("âŒ XTS Market Data instance not initialized for spot details")
+            return None
+
+        base_symbol = None
+        for key in sorted(SYMBOL_CONFIG.keys(), key=len, reverse=True):
+            if key in symbol_upper:
+                base_symbol = key
+                break
+
+        if not base_symbol or base_symbol not in SYMBOL_CONFIG:
+            logger.error(f"âŒ Unsupported symbol: '{symbol}'. Not found in SYMBOL_CONFIG.")
+            return None
+
+        sym_config = SYMBOL_CONFIG[base_symbol]
+        exchange_segment = sym_config['segment']
+        gap = sym_config['gap']
+        option_series = sym_config['series_opt']
+
+        cash_token = sym_config.get('cash_index_token')
+        cash_segment = sym_config.get('cash_index_segment')
+        if not cash_token or not cash_segment:
+            logger.error(f"âŒ Cash index token/segment not configured for '{symbol}'. Aborting.")
+            return None
+
+        logger.debug(f"âœ… Spot Details: {base_symbol}, Segment: {exchange_segment}, Gap: {gap}")
+
+        today = get_ist_now().date()
+        symbol_cache = expiry_cache.get(base_symbol, {})
+
+        if symbol_cache.get('date') == today:
+            cached_weekly_expiry = symbol_cache.get('weekly')
+        else:
+            symbol_cache = {}
+            cached_weekly_expiry = None
+            logger.info(f"ðŸ“… Invalidating expiry cache for {base_symbol} as date has changed.")
+
+        if use_cache_only and not cached_weekly_expiry:
+            logger.warning(f"âš ï¸ [CACHE-ONLY] Expiry data for {base_symbol} not in cache. Aborting spot details fetch.")
+            return None
+
+        if target_expiry:
+            expiry_date = target_expiry
+            logger.info(f"ðŸ“… Using provided target expiry for chain build: {expiry_date}")
+        elif cached_weekly_expiry:
+            expiry_date = cached_weekly_expiry
+            logger.debug(f"ðŸ“… Using cached weekly expiry for {base_symbol}: {expiry_date}")
+        else:
+            logger.info(f"ðŸ“… Weekly expiry cache is stale or empty for {base_symbol}. Fetching...")
+            expiry_response = _call_with_retry(
+                xt_m.get_expiry_date,
+                exchangeSegment=exchange_segment,
+                series=option_series,
+                symbol=base_symbol
+            )
+            if not expiry_response or not isinstance(expiry_response, dict) or \
+               'result' not in expiry_response or not expiry_response['result']:
+                logger.error(f"âŒ Could not get weekly expiry list for {base_symbol}. Response: {expiry_response}")
+                return None
+
+            parsed = sorted(
+                [datetime.strptime(d_str.split("T")[0], "%Y-%m-%d") for d_str in expiry_response['result']]
+            )
+            now = get_ist_now()
+            cached_weekly_expiry = next(
+                (dt.strftime("%d%b%Y") for dt in parsed if dt.date() >= now.date()),
+                parsed[-1].strftime("%d%b%Y")
+            )
+            expiry_date = cached_weekly_expiry
+            symbol_cache['weekly'] = expiry_date
+            logger.info(f"ðŸ“… Nearest weekly expiry determined for {base_symbol}: {expiry_date}")
+
+        symbol_cache['date'] = today
+        expiry_cache[base_symbol] = symbol_cache
+        logger.info(f"ðŸ“… Expiries cached for {base_symbol}. Weekly: {symbol_cache.get('weekly')}")
+
+        logger.info(f"ðŸšš Using cash index (Token: {cash_token}, Segment: {cash_segment}) for spot price for {base_symbol}.")
+
+        # REST ONLY: always force fresh spot fetch, never trust old cached spot here
+        fut_ltp = get_ltp(cash_token, cash_segment, ignore_cache=True)
+
+        min_price = sym_config.get('min_future_price', 1000)
+        if not fut_ltp or fut_ltp < min_price:
+            logger.error(
+                f"âŒ Failed to get a VALID LIVE LTP for cash index token {cash_token} "
+                f"({base_symbol}). Got {fut_ltp}, expected > {min_price}. Aborting."
+            )
+            return None
+
+        provisional_atm = int(round(fut_ltp / gap) * gap)
+
+        option_symbol_resp = _call_with_retry(
+            xt_m.get_option_symbol,
+            exchangeSegment=exchange_segment,
+            series=option_series,
+            symbol=base_symbol,
+            expiryDate=expiry_date,
+            optionType='CE',
+            strikePrice=provisional_atm
+        )
+
+        if not option_symbol_resp or not option_symbol_resp.get("result"):
+            logger.error(f"âŒ Failed to get option symbol details for {base_symbol} to determine lot size. Aborting.")
+            return None
+
+        option_details = option_symbol_resp["result"][0]
+        lot_size = option_details.get("LotSize", 1)
+        if lot_size <= 0:
+            lot_size = 1
+
+        final_atm = int(round(fut_ltp / gap) * gap)
+        dte = calculate_dte(expiry_date)
+
+        result = {
+            "fut_ltp": fut_ltp,
+            "atm": final_atm,
+            "lot_size": lot_size,
+            "expiry_date": expiry_date,
+            "dte": dte,
+            "exchange_segment": exchange_segment,
+            "base_symbol": base_symbol,
+            "option_series": option_series,
+            "fut_token": cash_token,
+            "cash_segment": cash_segment,
+            "gap": gap,
+            "timestamp": time.time(),
+        }
+
+        return result
+
+    except Exception as e:
+        logger.error(f"âŒ Error in get_spot_details: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
+
+def _get_underlying_for_greeks(chain_data: Dict) -> float:
+    """
+    Determines the best underlying price for Greeks calculations.
+    Prioritizes a freshly calculated synthetic spot, falls back to cash index.
+    """
+    fut_ltp = chain_data.get('fut_ltp', 0.0)
+    atm = chain_data.get('atm', 0)
+    gap = chain_data.get('gap', 50)
+    
+    # Attempt to calculate synthetic spot from ATM prices
+    atm_row = next((r for r in chain_data.get('chain', []) if r.get("strike") == atm), None)
+    
+    if atm_row and atm_row.get("ce_ltp", 0) > 0 and atm_row.get("pe_ltp", 0) > 0:
+        # Use live LTPs from the row for calculation
+        ce_p = get_ltp(atm_row.get('ce_token'), chain_data.get('exchange_segment')) or atm_row.get("ce_ltp")
+        pe_p = get_ltp(atm_row.get('pe_token'), chain_data.get('exchange_segment')) or atm_row.get("pe_ltp")
+        syn_fut = float(atm) + ce_p - pe_p
+        # Sanity check: ensure synthetic is reasonably close to cash
+        if abs(syn_fut - fut_ltp) <= gap * 3:
+            return syn_fut
+            
+    return fut_ltp # Fallback to cash index price
+
+def _fetch_token_for_strike(exchange_segment, series, symbol, expiry_date, option_type, strike):
+    """Helper to fetch token for a single strike/type in parallel."""
+    cache_key = (symbol, expiry_date, strike, option_type)
+    if cache_key in _STATIC_TOKEN_CACHE:
+        return strike, option_type, _STATIC_TOKEN_CACHE[cache_key]
+
+    try:
+        resp = _call_with_retry(
+            xt_m.get_option_symbol,
+            exchangeSegment=exchange_segment,
+            series=series,
+            symbol=symbol,
+            expiryDate=expiry_date,
+            optionType=option_type,
+            strikePrice=strike
+        )
+        token = resp["result"][0]["ExchangeInstrumentID"] if resp and resp.get("result") else None
+
+        if token:
+            _STATIC_TOKEN_CACHE[cache_key] = int(token)
+
+        return strike, option_type, token
+    except Exception as e:
+        logger.error(f"Error fetching token for {symbol} {strike} {option_type}: {e}")
+        return strike, option_type, None
+
+def _compute_shared_iv_and_greeks(
+    strike,
+    synthetic_spot,
+    dte,
+    ce_ltp,
+    pe_ltp,
+    prev_ce=None,
+    prev_pe=None,
+):
+    prev_ce = prev_ce or {}
+    prev_pe = prev_pe or {}
+
+    prev_ce_iv = float(prev_ce.get("iv", 0.0) or 0.0)
+    prev_pe_iv = float(prev_pe.get("iv", 0.0) or 0.0)
+
+    shared_iv_pct = 0.0
+    iv_source = "NONE"
+    raw_iv = 0.0
+
+    try:
+        if strike >= synthetic_spot:
+            if ce_ltp > 0:
+                ce_iv_greeks = calculate_all_greeks(
+                    "call", strike, synthetic_spot, dte, ce_ltp, 0.0
+                )
+                raw_iv = ce_iv_greeks.get("iv", 0.0)
+                if raw_iv > 0:
+                    shared_iv_pct = _normalise_iv(raw_iv)
+                    iv_source = "CE_OTM"
+        else:
+            if pe_ltp > 0:
+                pe_iv_greeks = calculate_all_greeks(
+                    "put", strike, synthetic_spot, dte, pe_ltp, 0.0
+                )
+                raw_iv = pe_iv_greeks.get("iv", 0.0)
+                if raw_iv > 0:
+                    shared_iv_pct = _normalise_iv(raw_iv)
+                    iv_source = "PE_OTM"
+    except Exception as e:
+        logger.debug(f"shared iv primary failed strike={strike}: {e}")
+
+    if shared_iv_pct <= 0 and ce_ltp > 0:
+        try:
+            ce_iv_greeks = calculate_all_greeks(
+                "call", strike, synthetic_spot, dte, ce_ltp, 0.0
+            )
+            raw_iv = ce_iv_greeks.get("iv", 0.0)
+            if raw_iv > 0:
+                shared_iv_pct = _normalise_iv(raw_iv)
+                iv_source = "CE_FALLBACK"
+        except Exception as e:
+            logger.debug(f"shared iv CE fallback failed strike={strike}: {e}")
+
+    if shared_iv_pct <= 0 and pe_ltp > 0:
+        try:
+            pe_iv_greeks = calculate_all_greeks(
+                "put", strike, synthetic_spot, dte, pe_ltp, 0.0
+            )
+            raw_iv = pe_iv_greeks.get("iv", 0.0)
+            if raw_iv > 0:
+                shared_iv_pct = _normalise_iv(raw_iv)
+                iv_source = "PE_FALLBACK"
+        except Exception as e:
+            logger.debug(f"shared iv PE fallback failed strike={strike}: {e}")
+
+    if shared_iv_pct > 0:
+        iv_dec = shared_iv_pct / 100.0
+        try:
+            ce_g = calculate_greeks_from_iv(
+                "call", strike, synthetic_spot, dte, iv_dec, 0.0
+            )
+            pe_g = calculate_greeks_from_iv(
+                "put", strike, synthetic_spot, dte, iv_dec, 0.0
+            )
+        except Exception as e:
+            logger.debug(f"shared greek from iv failed strike={strike}: {e}")
+            ce_g = {}
+            pe_g = {}
+
+        return {
+            "ce_iv": shared_iv_pct,
+            "pe_iv": shared_iv_pct,
+            "ce_delta": ce_g.get("delta", prev_ce.get("delta", 0.0)),
+            "ce_gamma": ce_g.get("gamma", prev_ce.get("gamma", 0.0)),
+            "ce_theta": ce_g.get("theta", prev_ce.get("theta", 0.0)),
+            "ce_vega": ce_g.get("vega", prev_ce.get("vega", 0.0)),
+            "pe_delta": pe_g.get("delta", prev_pe.get("delta", 0.0)),
+            "pe_gamma": pe_g.get("gamma", prev_pe.get("gamma", 0.0)),
+            "pe_theta": pe_g.get("theta", prev_pe.get("theta", 0.0)),
+            "pe_vega": pe_g.get("vega", prev_pe.get("vega", 0.0)),
+            "_iv_source": iv_source,
+        }
+
+    return {
+        "ce_iv": prev_ce_iv,
+        "pe_iv": prev_pe_iv,
+        "ce_delta": prev_ce.get("delta", 0.0),
+        "ce_gamma": prev_ce.get("gamma", 0.0),
+        "ce_theta": prev_ce.get("theta", 0.0),
+        "ce_vega": prev_ce.get("vega", 0.0),
+        "pe_delta": prev_pe.get("delta", 0.0),
+        "pe_gamma": prev_pe.get("gamma", 0.0),
+        "pe_theta": prev_pe.get("theta", 0.0),
+        "pe_vega": prev_pe.get("vega", 0.0),
+        "_iv_source": "PREV",
+    }
+
+def _compute_synthetic_spot_from_atm(chain: dict) -> float:
+    rows = chain.get("chain", [])
+    fut_ltp = float(chain.get("fut_ltp") or 0.0)
+    atm = chain.get("atm")
+    gap = float(chain.get("gap") or 0.0)
+
+    synthetic_spot = fut_ltp
+    try:
+        if atm and gap > 0:
+            atm_row = next((r for r in rows if r.get("strike") == atm), None)
+            if atm_row:
+                ce_p = float(atm_row.get("ce_ltp") or 0.0)
+                pe_p = float(atm_row.get("pe_ltp") or 0.0)
+                if ce_p > 0 and pe_p > 0:
+                    syn = float(atm) + ce_p - pe_p
+                    if abs(syn - float(atm)) <= (gap * 2):
+                        synthetic_spot = syn
+    except Exception as e:
+        logger.warning(f"synthetic spot calc failed: {e}")
+
+    return synthetic_spot
+
+def _recompute_iv_with_synthetic(chain_data: dict) -> dict:
+    """
+    Recompute per-leg IV and Greeks using synthetic_spot as underlying,
+    but keep the ITM/OTM adjustment logic from _calculate_row_greeks.
+    """
+    synthetic_spot = float(chain_data.get("synthetic_spot") or 0.0)
+    dte = float(chain_data.get("dte") or 0.0)
+    risk_free_rate = 0.0
+
+    if synthetic_spot <= 0 or dte <= 0:
+        # Nothing to safely recompute
+        return chain_data
+
+    for row in chain_data.get("chain", []):
+        strike = float(row.get("strike") or 0.0)
+        ce_ltp = float(row.get("ce_ltp") or 0.0)
+        pe_ltp = float(row.get("pe_ltp") or 0.0)
+
+        ce_greeks, pe_greeks = _calculate_row_greeks(
+            strike=strike,
+            fut_ltp=synthetic_spot,  # use synthetic spot as underlying
+            dte=dte,
+            ce_ltp=ce_ltp,
+            pe_ltp=pe_ltp,
+            risk_free_rate=risk_free_rate,
+        )
+
+        row["ce_iv"] = round(ce_greeks.get("iv", 0.0) * 100, 2)
+        row["pe_iv"] = round(pe_greeks.get("iv", 0.0) * 100, 2)
+        row["ce_delta"] = ce_greeks.get("delta", 0.0)
+        row["ce_gamma"] = ce_greeks.get("gamma", 0.0)
+        row["ce_theta"] = ce_greeks.get("theta", 0.0)
+        row["ce_vega"] = ce_greeks.get("vega", 0.0)
+        row["pe_delta"] = pe_greeks.get("delta", 0.0)
+        row["pe_gamma"] = pe_greeks.get("gamma", 0.0)
+        row["pe_theta"] = pe_greeks.get("theta", 0.0)
+        row["pe_vega"] = pe_greeks.get("vega", 0.0)
+
+    return chain_data
+
+def _recompute_chain_rows(chain: dict) -> dict:
+    """
+    Refresh IV/Greeks for all rows using synthetic_spot as underlying,
+    with the same ITM adjustment model as _calculate_row_greeks.
+    Also recomputes synthetic_spot from ATM row when possible.
+    """
+    chain = deepcopy(chain)
+
+    rows = chain.get("chain", [])
+    dte = float(chain.get("dte") or 0.0)
+    gap = int(chain.get("gap") or 50)
+
+    # First, compute synthetic spot from the current ATM row.
+    synthetic_spot = _compute_synthetic_spot_from_atm(chain)
+    chain["synthetic_spot"] = synthetic_spot
+
+    # Update ATM based on synthetic spot
+    if synthetic_spot > 0 and gap > 0:
+        chain["atm"] = int(round(synthetic_spot / gap) * gap)
+
+    risk_free_rate = 0.0
+
+    for row in rows:
+        strike = float(row.get("strike") or 0.0)
+        ce_ltp = float(row.get("ce_ltp") or 0.0)
+        pe_ltp = float(row.get("pe_ltp") or 0.0)
+
+        ce_greeks, pe_greeks = _calculate_row_greeks(
+            strike=strike,
+            fut_ltp=synthetic_spot,  # use synthetic spot as underlying
+            dte=dte,
+            ce_ltp=ce_ltp,
+            pe_ltp=pe_ltp,
+            risk_free_rate=risk_free_rate,
+        )
+
+        row.update({
+            "ce_iv": round(ce_greeks.get("iv", 0.0) * 100, 2),
+            "pe_iv": round(pe_greeks.get("iv", 0.0) * 100, 2),
+            "ce_delta": ce_greeks.get("delta", 0.0),
+            "ce_gamma": ce_greeks.get("gamma", 0.0),
+            "ce_theta": ce_greeks.get("theta", 0.0),
+            "ce_vega": ce_greeks.get("vega", 0.0),
+            "pe_delta": pe_greeks.get("delta", 0.0),
+            "pe_gamma": pe_greeks.get("gamma", 0.0),
+            "pe_theta": pe_greeks.get("theta", 0.0),
+            "pe_vega": pe_greeks.get("vega", 0.0),
+            "is_atm": int(row.get("strike") or 0) == int(chain.get("atm") or 0),
+        })
+
+        if chain.get("symbol") == "NIFTY" and int(strike) == 24150:
+            logger.info(
+                f"[CHAIN-SST] NIFTY 24150 | ce_iv={row.get('ce_iv')} pe_iv={row.get('pe_iv')} "
+                f"ce_ltp={ce_ltp} pe_ltp={pe_ltp} syn={synthetic_spot}"
+            )
+
+    return chain
+
+def _finalize_chain_snapshot(chain: dict) -> dict:
+    snapshot = deepcopy(chain)
+    snapshot["published_at"] = _stamp_now()
+    return snapshot
+
+
+def _publish_chain_snapshot(symbol: str, chain: dict) -> dict:
+    snapshot = _finalize_chain_snapshot(chain)
+
+    if getattr(state, "option_chains", None) is None:
+        state.option_chains = {}
+    state.option_chains[symbol] = deepcopy(snapshot)
+
+    if hasattr(state, "broadcast_queue"):
+        broadcast_data = deepcopy(snapshot)
+        broadcast_data["fut_token"] = None
+        state.broadcast_queue.put_nowait({
+            "type": "option_chain_update",
+            "symbol": symbol,
+            "data": broadcast_data,
+        })
+
+    if symbol == "NIFTY":
+        row24150 = next(
+            (r for r in snapshot.get("chain", []) if r.get("strike") == 24150),
+            None,
+        )
+        if row24150:
+            logger.info(
+                f"[CHAIN-PUBLISH] NIFTY 24150 | ce_iv={row24150.get('ce_iv')} pe_iv={row24150.get('pe_iv')} "
+                f"ce_ltp={row24150.get('ce_ltp')} pe_ltp={row24150.get('pe_ltp')} "
+                f"syn={snapshot.get('synthetic_spot')} fut={snapshot.get('fut_ltp')} "
+                f"published_at={snapshot.get('published_at')}"
+            )
+
+    return snapshot
+
+
+def _update_chain(cached_chain_data: Dict) -> Optional[Dict]:
+    """Refresh prices only, then recompute one canonical chain snapshot, then publish it."""
+    symbol_upper = cached_chain_data.get("symbol")
+    if not symbol_upper:
+        logger.error("âŒ Cannot update chain: 'symbol' missing from cached_chain_data.")
+        return cached_chain_data
+
+    logger.debug(f"ðŸ”„ Efficiently updating existing option chain for {symbol_upper}...")
+
+    try:
+        base_symbol = cached_chain_data.get("base_symbol", symbol_upper)
+        sym_config = SYMBOL_CONFIG.get(base_symbol, {})
+
+        cash_token = cached_chain_data.get("fut_token")
+        cash_segment = cached_chain_data.get("cash_segment") or sym_config.get("cash_index_segment")
+        option_segment = cached_chain_data.get("exchange_segment") or sym_config.get("segment")
+        gap = cached_chain_data.get("gap")
+        expiry_date = cached_chain_data.get("expiry")
+
+        if not all([cash_token, cash_segment, option_segment, gap, expiry_date, base_symbol]):
+            logger.error(f"âŒ Corrupt cached chain for {symbol_upper}. Missing critical data. Returning stale data.")
+            return cached_chain_data
+
+        fo_instruments_to_fetch = []
+        for row in cached_chain_data["chain"]:
+            if row.get("ce_token"):
+                fo_instruments_to_fetch.append({
+                    "exchangeSegment": option_segment,
+                    "exchangeInstrumentID": row["ce_token"],
+                })
+            if row.get("pe_token"):
+                fo_instruments_to_fetch.append({
+                    "exchangeSegment": option_segment,
+                    "exchangeInstrumentID": row["pe_token"],
+                })
+
+        if fo_instruments_to_fetch:
+            is_bse_fo = option_segment == 12
+            fo_quote_code = 1501 if is_bse_fo else config.MESSAGE_CODE_LTP
+
+            response = _call_with_retry(
+                xt_m.get_quote,
+                Instruments=fo_instruments_to_fetch,
+                xtsMessageCode=fo_quote_code,
+                publishFormat="JSON",
+            )
+            if response and response.get("type") == "success":
+                result = response.get("result", {})
+                list_quotes = result.get("listQuotes", [])
+                for quote_str in list_quotes:
+                    quote = json.loads(quote_str) if isinstance(quote_str, str) else quote_str
+                    token = quote.get("ExchangeInstrumentID")
+                    ltp = float(
+                        quote.get("LastTradedPrice")
+                        or quote.get("Touchline", {}).get("LastTradedPrice")
+                        or quote.get("Close")
+                        or 0.0
+                    )
+                    if token and ltp > 0:
+                        state.update_price(int(token), ltp)
+
+        cash_instruments_rest = [{
+            "exchangeSegment": cash_segment,
+            "exchangeInstrumentID": cash_token,
+        }]
+        cash_response = _call_with_retry(
+            xt_m.get_quote,
+            Instruments=cash_instruments_rest,
+            xtsMessageCode=1501,
+            publishFormat="JSON",
+        )
+        if cash_response and cash_response.get("type") == "success":
+            cash_quotes = cash_response.get("result", {}).get("listQuotes", [])
+            for quote_str in cash_quotes:
+                quote = json.loads(quote_str) if isinstance(quote_str, str) else quote_str
+                token = quote.get("ExchangeInstrumentID")
+                ltp = float(
+                    quote.get("LastTradedPrice")
+                    or quote.get("Touchline", {}).get("LastTradedPrice")
+                    or quote.get("Close")
+                    or 0.0
+                )
+                if token and ltp > 0:
+                    state.update_price(int(token), ltp)
+                    logger.debug(f"ðŸ’° Cash index {token} updated via 1501: â‚¹{ltp:.2f}")
+
+        fut_ltp = get_ltp(cash_token, cash_segment)
+
+        min_price = sym_config.get("min_future_price", 1000)
+        if not fut_ltp or fut_ltp < min_price:
+            logger.warning(f"âš ï¸ Invalid/Missing LTP for cash index {cash_token} ({fut_ltp}). Using stale LTP.")
+            fut_ltp = cached_chain_data.get("fut_ltp", 0)
+            if not fut_ltp or fut_ltp < min_price:
+                logger.error("âŒ Stale LTP for cash index is also invalid. Aborting update.")
+                return cached_chain_data
+
+        underlying_for_greeks = _get_underlying_for_greeks({
+            **cached_chain_data,
+            "fut_ltp": fut_ltp,
+        })
+        atm = int(round(underlying_for_greeks / gap) * gap)
+        dte = calculate_dte(expiry_date)
+
+        cached_chain_data["fut_ltp"] = fut_ltp
+        cached_chain_data["dte"] = dte
+        cached_chain_data["atm"] = atm
+        cached_chain_data["timestamp"] = time.time()
+
+        for row in cached_chain_data["chain"]:
+            strike = row["strike"]
+            ce_token = row.get("ce_token")
+            pe_token = row.get("pe_token")
+
+            ce_ltp = get_ltp(ce_token, option_segment) if ce_token else 0.0
+            pe_ltp = get_ltp(pe_token, option_segment) if pe_token else 0.0
+
+            if ce_ltp > fut_ltp:
+                ce_ltp = get_ltp(ce_token, option_segment, ignore_cache=True)
+                if ce_ltp > fut_ltp:
+                    logger.warning(
+                        f"âš ï¸ Invalid CE LTP {ce_ltp:.2f} > Spot {fut_ltp:.2f} for strike {strike}. Treating as 0."
+                    )
+                    ce_ltp = 0.0
+
+            if pe_ltp > strike:
+                pe_ltp = get_ltp(pe_token, option_segment, ignore_cache=True)
+                if pe_ltp > strike:
+                    logger.warning(
+                        f"âš ï¸ Invalid PE LTP {pe_ltp:.2f} > Strike {strike}. Treating as 0."
+                    )
+                    pe_ltp = 0.0
+
+            row["ce_ltp"] = ce_ltp
+            row["pe_ltp"] = pe_ltp
+
+        recomputed = _recompute_chain_rows(cached_chain_data)
+        published = _publish_chain_snapshot(symbol_upper, recomputed)
+
+        logger.debug(f"âœ… Chain update (single-source-of-truth) successful for {symbol_upper}.")
+        return published
+
+    except Exception as e:
+        logger.error(f"âŒ Error during efficient chain update for {symbol_upper}: {e}", exc_info=True)
+        return cached_chain_data
+
+def _build_new_chain(symbol: str, strike_range: int, target_expiry: Optional[str]) -> Optional[Dict]:
+    """Helper to build a new option chain from scratch."""
+    logger.info(f"ðŸ“Š Building new option chain for {symbol}...")
+    spot_details = get_spot_details(symbol, target_expiry=target_expiry)
+    if not spot_details:
+        logger.error(f"âŒ Could not get spot details for {symbol}. Aborting chain build.")
+        return None
+
+    fut_ltp, atm, lot_size, expiry_date, dte, exchange_segment, base_symbol, option_series, fut_token, gap, cash_segment = (
+        spot_details['fut_ltp'],
+        spot_details['atm'],
+        spot_details['lot_size'],
+        spot_details['expiry_date'],
+        spot_details['dte'],
+        spot_details['exchange_segment'],
+        spot_details['base_symbol'],
+        spot_details['option_series'],
+        spot_details['fut_token'],
+        spot_details['gap'],
+        spot_details['cash_segment']
+    )
+
+    is_bse = exchange_segment == 12  # SENSEX / BANKEX
+
+    strikes = [atm + i * gap for i in range(-strike_range, strike_range + 1)]
+    logger.info(f"ðŸ“ Strikes: {strikes[0]} to {strikes[-1]} (Total: {len(strikes)})")
+
+    chain = []
+    instruments_to_subscribe = []
+
+    # Cash index subscribes on its own segment
+    instruments_to_subscribe.append({
+        "exchangeSegment": cash_segment,
+        "exchangeInstrumentID": fut_token
+    })
+
+    strike_token_map = {}
+    option_instruments_for_bulk_fetch = []
+
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        futures = []
+        for strike in strikes:
+            futures.append(
+                executor.submit(
+                    _fetch_token_for_strike,
+                    exchange_segment,
+                    option_series,
+                    base_symbol,
+                    expiry_date,
+                    "CE",
+                    strike
+                )
+            )
+            futures.append(
+                executor.submit(
+                    _fetch_token_for_strike,
+                    exchange_segment,
+                    option_series,
+                    base_symbol,
+                    expiry_date,
+                    "PE",
+                    strike
+                )
+            )
+
+        for future in as_completed(futures):
+            s_strike, s_type, s_token = future.result()
+
+            if s_strike not in strike_token_map:
+                strike_token_map[s_strike] = {'ce_token': None, 'pe_token': None}
+
+            if s_type == "CE":
+                strike_token_map[s_strike]['ce_token'] = s_token
+            else:
+                strike_token_map[s_strike]['pe_token'] = s_token
+
+            if s_token:
+                option_instruments_for_bulk_fetch.append({
+                    'exchangeSegment': exchange_segment,
+                    'exchangeInstrumentID': int(s_token)
+                })
+
+    if option_instruments_for_bulk_fetch:
+        logger.info(f"ðŸšš Bulk fetching LTP for {len(option_instruments_for_bulk_fetch)} option instruments...")
+
+        chunk_size = 50
+        total_fetched = 0
+        all_chunks_successful = True
+
+        for i in range(0, len(option_instruments_for_bulk_fetch), chunk_size):
+            chunk = option_instruments_for_bulk_fetch[i:i + chunk_size]
+            bulk_quote_code = 1501 if is_bse else config.MESSAGE_CODE_LTP
+
+            response = _call_with_retry(
+                xt_m.get_quote,
+                Instruments=chunk,
+                xtsMessageCode=bulk_quote_code,
+                publishFormat='JSON'
+            )
+
+            if response and response.get('type') == 'success':
+                result = response.get('result', {})
+                list_quotes = result.get('listQuotes', [])
+
+                for quote_str in list_quotes:
+                    quote = json.loads(quote_str) if isinstance(quote_str, str) else quote_str
+                    token = quote.get('ExchangeInstrumentID')
+                    ltp = float(
+                        quote.get('LastTradedPrice')
+                        or quote.get('Touchline', {}).get('LastTradedPrice')
+                        or quote.get('Close')
+                        or 0.0
+                    )
+                    if token and ltp > 0:
+                        state.update_price(int(token), ltp)
+
+                total_fetched += len(list_quotes)
+            else:
+                all_chunks_successful = False
+                logger.warning(f"âš ï¸ A chunk of the bulk LTP fetch failed. Response: {response}")
+
+        if all_chunks_successful:
+            logger.info(
+                f"âœ… Cache populated with {total_fetched} prices from "
+                f"{len(option_instruments_for_bulk_fetch)} instruments."
+            )
+        else:
+            logger.warning("âš ï¸ One or more bulk LTP fetch chunks failed. Some prices may be missing.")
+
+    for strike in strikes:
+        tokens = strike_token_map.get(strike, {})
+        ce_token = tokens.get('ce_token')
+        pe_token = tokens.get('pe_token')
+
+        ce_ltp = (state.get_price(int(ce_token)) or 0.0) if ce_token else 0.0
+        pe_ltp = (state.get_price(int(pe_token)) or 0.0) if pe_token else 0.0
+
+        if ce_ltp > 0 and ce_ltp > fut_ltp:
+            new_ce = get_ltp(ce_token, exchange_segment, ignore_cache=True)
+            if new_ce > fut_ltp:
+                logger.warning(
+                    f"âš ï¸ Invalid CE LTP {new_ce:.2f} > Spot {fut_ltp:.2f} "
+                    f"for strike {strike}. Treating as 0."
+                )
+                ce_ltp = 0.0
+            else:
+                ce_ltp = new_ce
+
+        if pe_ltp > 0 and pe_ltp > strike:
+            new_pe = get_ltp(pe_token, exchange_segment, ignore_cache=True)
+            if new_pe > strike:
+                logger.warning(
+                    f"âš ï¸ Invalid PE LTP {new_pe:.2f} > Strike {strike}. Treating as 0."
+                )
+                pe_ltp = 0.0
+            else:
+                pe_ltp = new_pe
+
+        risk_free_rate = 0.0
+        ce_greeks, pe_greeks = _calculate_row_greeks(
+            strike, fut_ltp, dte, ce_ltp, pe_ltp, risk_free_rate
+        )
+
+        chain.append({
+            "strike": strike,
+            "ce_token": int(ce_token) if ce_token else None,
+            "ce_symbol": f"{base_symbol}{expiry_date}CE{strike}",
+            "ce_ltp": ce_ltp,
+            "ce_lot_size": lot_size,
+            "ce_iv": round(ce_greeks.get("iv", 0) * 100, 2),
+            "ce_delta": ce_greeks.get("delta", 0),
+            "ce_gamma": ce_greeks.get("gamma", 0),
+            "ce_vega": ce_greeks.get("vega", 0),
+            "ce_theta": ce_greeks.get("theta", 0),
+            "pe_token": int(pe_token) if pe_token else None,
+            "pe_symbol": f"{base_symbol}{expiry_date}PE{strike}",
+            "pe_ltp": pe_ltp,
+            "pe_lot_size": lot_size,
+            "pe_iv": round(pe_greeks.get("iv", 0) * 100, 2),
+            "pe_delta": pe_greeks.get("delta", 0),
+            "pe_gamma": pe_greeks.get("gamma", 0),
+            "pe_vega": pe_greeks.get("vega", 0),
+            "pe_theta": pe_greeks.get("theta", 0),
+            "is_atm": strike == atm
+        })
+
+    _atm_row = next((r for r in chain if r["strike"] == atm), None)
+    syn_fut = fut_ltp
+
+    if _atm_row and _atm_row["ce_ltp"] > 0 and _atm_row["pe_ltp"] > 0:
+        _syn = float(atm) + _atm_row["ce_ltp"] - _atm_row["pe_ltp"]
+        if abs(_syn - fut_ltp) <= gap * 3:
+            syn_fut = _syn
+            syn_fut_atm = int(round(_syn / gap) * gap)
+            if syn_fut_atm != atm:
+                logger.info(
+                    f"ðŸ“ [{base_symbol}] ATM corrected: {atm} â†’ {syn_fut_atm} "
+                    f"(spot=â‚¹{fut_ltp:.2f}, syn_fut=â‚¹{_syn:.2f})"
+                )
+                atm = syn_fut_atm
+        else:
+            logger.warning(
+                f"âš ï¸ [{base_symbol}] Syn.Fut sanity failed: â‚¹{_syn:.2f} vs "
+                f"spot â‚¹{fut_ltp:.2f}. Keeping spot-based ATM={atm}."
+            )
+    else:
+        logger.debug(f"[{base_symbol}] ATM row CE/PE LTP unavailable â€” skipping syn_fut ATM correction.")
+
+    if atm not in strikes:
+        logger.warning(
+            f"Corrected ATM {atm} is outside the initial strike range. "
+            "Fetching data for this new strike..."
+        )
+        new_strike = atm
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_ce = executor.submit(
+                _fetch_token_for_strike,
+                exchange_segment,
+                option_series,
+                base_symbol,
+                expiry_date,
+                "CE",
+                new_strike
+            )
+            future_pe = executor.submit(
+                _fetch_token_for_strike,
+                exchange_segment,
+                option_series,
+                base_symbol,
+                expiry_date,
+                "PE",
+                new_strike
+            )
+            _, _, ce_token_new = future_ce.result()
+            _, _, pe_token_new = future_pe.result()
+
+        ce_ltp_new = get_ltp(ce_token_new, exchange_segment) if ce_token_new else 0.0
+        pe_ltp_new = get_ltp(pe_token_new, exchange_segment) if pe_token_new else 0.0
+
+        if ce_ltp_new > fut_ltp:
+            ce_ltp_new = 0.0
+        if pe_ltp_new > new_strike:
+            pe_ltp_new = 0.0
+
+        ce_greeks_new, pe_greeks_new = _calculate_row_greeks(
+            new_strike, fut_ltp, dte, ce_ltp_new, pe_ltp_new, 0.0
+        )
+
+        chain.append({
+            "strike": new_strike,
+            "ce_token": int(ce_token_new) if ce_token_new else None,
+            "ce_symbol": f"{base_symbol}{expiry_date}CE{new_strike}",
+            "ce_ltp": ce_ltp_new,
+            "ce_lot_size": lot_size,
+            "ce_iv": round(ce_greeks_new.get("iv", 0) * 100, 2),
+            "ce_delta": ce_greeks_new.get("delta", 0),
+            "ce_gamma": ce_greeks_new.get("gamma", 0),
+            "ce_vega": ce_greeks_new.get("vega", 0),
+            "ce_theta": ce_greeks_new.get("theta", 0),
+            "pe_token": int(pe_token_new) if pe_token_new else None,
+            "pe_symbol": f"{base_symbol}{expiry_date}PE{new_strike}",
+            "pe_ltp": pe_ltp_new,
+            "pe_lot_size": lot_size,
+            "pe_iv": round(pe_greeks_new.get("iv", 0) * 100, 2),
+            "pe_delta": pe_greeks_new.get("delta", 0),
+            "pe_gamma": pe_greeks_new.get("gamma", 0),
+            "pe_vega": pe_greeks_new.get("vega", 0),
+            "pe_theta": pe_greeks_new.get("theta", 0),
+            "is_atm": True
+        })
+        chain.sort(key=lambda x: x['strike'])
+
+    for _r in chain:
+        _r["is_atm"] = (_r["strike"] == atm)
+
+    for row in chain:
+        if row['ce_token']:
+            instruments_to_subscribe.append({
+                'exchangeSegment': exchange_segment,
+                'exchangeInstrumentID': row['ce_token']
+            })
+        if row['pe_token']:
+            instruments_to_subscribe.append({
+                'exchangeSegment': exchange_segment,
+                'exchangeInstrumentID': row['pe_token']
+            })
+
+    if instruments_to_subscribe:
+        unique_instruments = [dict(t) for t in {tuple(d.items()) for d in instruments_to_subscribe}]
+
+        nse_fo_instruments = [i for i in unique_instruments if i['exchangeSegment'] == 2]
+        bse_fo_instruments = [i for i in unique_instruments if i['exchangeSegment'] == 12]
+        cash_instruments = [i for i in unique_instruments if i['exchangeSegment'] in (1, 11)]
+
+        logger.info(
+            f"ðŸ“¡ [{base_symbol}] Subscription Plan: "
+            f"{len(nse_fo_instruments)} NSE FO (1512) + "
+            f"{len(bse_fo_instruments)} BSE FO (1501) + "
+            f"{len(cash_instruments)} cash index (1501 Touchline)"
+        )
+
+        try:
+            if nse_fo_instruments:
+                xt_m.send_subscription(nse_fo_instruments, config.MESSAGE_CODE_LTP)
+                if state.socket_connected and md_socket:
+                    md_socket.send_subscription(nse_fo_instruments, config.MESSAGE_CODE_LTP)
+
+            if bse_fo_instruments:
+                xt_m.send_subscription(bse_fo_instruments, 1501)
+                if state.socket_connected and md_socket:
+                    md_socket.send_subscription(bse_fo_instruments, 1501)
+
+            if cash_instruments:
+                xt_m.send_subscription(cash_instruments, 1501)
+                if state.socket_connected and md_socket:
+                    md_socket.send_subscription(cash_instruments, 1501)
+
+            for instr in unique_instruments:
+                state.add_subscription(instr['exchangeInstrumentID'])
+
+        except Exception as e:
+            logger.warning(f"âš ï¸  Subscription warning: {e}")
+
+    logger.info(f"âœ… Option chain built successfully: {len(chain)} strikes")
+
+    chain_result = {
+        "symbol": base_symbol,
+        "expiry": expiry_date,
+        "dte": dte,
+        "atm": atm,
+        "fut_ltp": fut_ltp,
+        "synthetic_spot": syn_fut,
+        "fut_token": fut_token,
+        "lot_size": lot_size,
+        "exchange_segment": exchange_segment,
+        "cash_segment": cash_segment,
+        "chain": chain,
+        "timestamp": time.time(),
+        "gap": gap,
+        "option_series": option_series,
+    }
+
+    # Recompute IV/Greeks using synthetic_spot as underlying,
+    # but KEEP the ITM adjustment logic from _calculate_row_greeks.
+    chain_result = _recompute_iv_with_synthetic(chain_result)
+
+
+    # Finalize the chain BEFORE broadcasting / storing / returning
+    chain_result = _finalize_chain_snapshot(chain_result)
+    if getattr(state, "option_chains", None) is None:
+        state.option_chains = {}
+    state.option_chains[base_symbol] = deepcopy(chain_result)
+    if base_symbol == "NIFTY":
+        row24150 = next((r for r in chain_result["chain"] if r.get("strike") == 24150), None)
+        if row24150:
+            logger.info(
+                f"[CHAIN-REFRESH] NIFTY 24150 | "
+                f"ce_iv={row24150.get('ce_iv')} pe_iv={row24150.get('pe_iv')} "
+                f"ce_ltp={row24150.get('ce_ltp')} pe_ltp={row24150.get('pe_ltp')} "
+                f"syn={chain_result.get('synthetic_spot')} fut={chain_result.get('fut_ltp')} "
+                f"published_at={chain_result.get('published_at')}"
+            )
+
+    if hasattr(state, 'broadcast_queue'):
+        broadcast_data = deepcopy(chain_result)
+        broadcast_data['fut_token'] = None
+        state.broadcast_queue.put_nowait({
+            'type': 'option_chain_update',
+            'symbol': base_symbol,
+            'data': broadcast_data
+        })
+
+    logger.info(f"âœ… Option chain built for {base_symbol}")
+    return chain_result
+ 
+
+def get_option_chain(symbol: str, strike_range: int = 15, target_expiry: str = None) -> Optional[Dict]:
+    """
+    Build or update option chain with Greeks calculations.
+    Single source of truth for chain creation and updates.
+    - Valid cached chain â†’ efficient price+greeks update via _update_chain
+    - No/expired cache  â†’ full build from scratch via _build_new_chain
+    """
+    symbol_upper = symbol.upper()
+
+    if symbol_upper not in _chain_build_locks:
+        _chain_build_locks[symbol_upper] = threading.Lock()
+
+    lock = _chain_build_locks[symbol_upper]
+
+    with lock:
+        try:
+            cached_chain_data = state.get_option_chain(symbol_upper)
+            is_cache_valid = False
+
+            if not target_expiry and cached_chain_data and 'expiry' in cached_chain_data:
+                try:
+                    expiry_dt = datetime.strptime(cached_chain_data['expiry'], "%d%b%Y".upper()).date()
+                    if expiry_dt >= get_ist_now().date():
+                        is_cache_valid = True
+                except (ValueError, TypeError):
+                    is_cache_valid = False
+
+            # NEW: Check if the ATM has drifted too far from the center
+            if is_cache_valid:
+                try:
+                    gap = cached_chain_data.get('gap')
+                    cash_token = cached_chain_data.get('fut_token')
+                    cash_segment = cached_chain_data.get('cash_segment')
+
+                    if gap and cash_token and cash_segment:
+                        current_spot = get_ltp(cash_token, cash_segment, ignore_cache=True)
+                        if current_spot > 0:
+                            new_atm = int(round(current_spot / gap) * gap)
+                            chain_strikes = [r['strike'] for r in cached_chain_data.get('chain', [])]
+                            if chain_strikes:
+                                center_strike = chain_strikes[len(chain_strikes) // 2]
+                                drift_threshold_strikes = 10
+                                drift_in_strikes = abs(new_atm - center_strike) / gap
+
+                                if drift_in_strikes > drift_threshold_strikes:
+                                    logger.info(f"ATM for {symbol_upper} drifted by {drift_in_strikes:.1f} strikes. Rebuilding chain around new ATM {new_atm}.")
+                                    is_cache_valid = False  # Force a rebuild
+                except Exception as e:
+                    logger.warning(f"Error during ATM drift check for {symbol_upper}: {e}. Proceeding with update.")
+
+            if is_cache_valid:
+                return _update_chain(cached_chain_data)
+            else:
+                new_chain = _build_new_chain(symbol, strike_range, target_expiry)
+                if new_chain:
+                    state.update_option_chain(symbol_upper, new_chain)
+                return new_chain
+
+        except Exception as e:
+            logger.error(f"âŒ Option chain build/update error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+ 
+
+
+==================== FILE: order_book_service.py ====================
+"""
+Order Book Service â€” Dedicated Process (Port 8002)
+Fetches order book every 1s (was 5s), serves via HTTP and ZMQ REP.
+"""
+import asyncio
+import json
+import sqlite3
+import os
+import zmq
+import zmq.asyncio
+from datetime import datetime
+from typing import Dict, List, Optional
+
+import uvicorn
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+
+import config
+from utils.logger import logger
+from models.state import state
+from database.db_manager import Database
+
+app = FastAPI(title="Order Book Service", version="1.0")
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"],
+    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+)
+
+websocket_clients:  List[WebSocket]  = []
+last_order_book:    Optional[List[Dict]] = None
+last_fetch_time:    Optional[datetime]   = None
+login_token_data:   Optional[Dict]       = None
+_xt_instance = None   # â† cached XTSConnect instance, never recreated
+
+TOKEN_DB = os.path.abspath("shared_tokens.db")
+
+REFRESH_INTERVAL = 1.0   # â† was 5s, now 1s
+
+
+def get_login_token_data() -> Optional[Dict]:
+    global login_token_data
+    try:
+        conn   = sqlite3.connect(TOKEN_DB)
+        cursor = conn.cursor()
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS tokens "
+            "(key TEXT PRIMARY KEY, value TEXT, timestamp DATETIME)"
+        )
+        cursor.execute("SELECT value FROM tokens WHERE key = 'xts_interactive_token'")
+        result = cursor.fetchone()
+        conn.close()
+        if result:
+            token_data = json.loads(result[0])
+            if token_data.get('token'):
+                login_token_data = token_data
+                return login_token_data
+    except Exception as e:
+        logger.error(f"âŒ OrderBookService: Failed to load token: {e}")
+    return None
+
+
+def _get_or_create_xt_instance():
+    """Return cached XTSConnect instance â€” create only once, reuse forever."""
+    global _xt_instance
+    if _xt_instance is not None:
+        return _xt_instance
+    token_data = get_login_token_data()
+    if not token_data:
+        return None
+    try:
+        from Connect import XTSConnect
+        import cred
+        xt = XTSConnect(cred.API_KEY_I, cred.API_SECRET_I, "WEBAPI")
+        xt._set_common_variables(
+            token_data['token'],
+            token_data.get('userID'),
+            token_data.get('isInvestorClient')
+        )
+        xt.isInvestorClient = False
+        _xt_instance = xt
+        logger.info("âœ… OrderBookService: XTSConnect instance created and cached.")
+        return _xt_instance
+    except Exception as e:
+        logger.error(f"âŒ OrderBookService: Failed to create XTSConnect: {e}")
+        return None
+
+
+async def refresh_order_book():
+    global last_order_book, last_fetch_time, _xt_instance
+    xt = _get_or_create_xt_instance()
+    if not xt:
+        logger.error("OrderBookService: No XTS instance available")
+        return
+
+    try:
+        import cred
+        loop = asyncio.get_event_loop()
+
+        def _fetch():
+            try:
+                client_id = getattr(cred, 'clientID', None)
+                response  = xt.get_order_book(clientID=client_id)
+                if response and response.get('type') == 'success':
+                    result = response.get('result', {})
+                    if isinstance(result, dict):
+                        return result.get('orderList', []) or result.get('OrderList', [])
+                    elif isinstance(result, list):
+                        return result
+            except Exception as e:
+                logger.warning(f"OrderBookService: fetch error â€” {e}")
+                # If token expired, reset instance so next call recreates
+                global _xt_instance
+                _xt_instance = None
+            return None
+
+        orders = await loop.run_in_executor(None, _fetch)
+
+        if orders is not None:
+            last_order_book = orders
+            last_fetch_time = datetime.now()
+
+            if hasattr(state, 'db') and state.db:
+                await loop.run_in_executor(None, state.db.insert_orders_bulk, last_order_book)
+
+            logger.debug(f"ðŸ“‹ OrderBookService: {len(last_order_book)} orders refreshed")
+
+            # Notify WS clients
+            msg = {"count": len(last_order_book), "timestamp": last_fetch_time.isoformat()}
+            dead = []
+            for client in websocket_clients:
+                try:
+                    await client.send_json(msg)
+                except Exception:
+                    dead.append(client)
+            for c in dead:
+                if c in websocket_clients:
+                    websocket_clients.remove(c)
+
+    except Exception as e:
+        logger.error(f"âŒ OrderBookService: Refresh failed: {e}")
+
+
+@app.get("/orderbook")
+async def api_get_order_book():
+    """Return latest cached order book, refreshing if stale > 1s."""
+    if not last_fetch_time or (datetime.now() - last_fetch_time).total_seconds() > 1:
+        await refresh_order_book()
+    return {
+        "order_book": last_order_book or [],
+        "timestamp":  last_fetch_time.isoformat() if last_fetch_time else None,
+    }
+
+
+@app.websocket("/ws")
+async def ws_orderbook(websocket: WebSocket):
+    await websocket.accept()
+    websocket_clients.append(websocket)
+    try:
+        while True:
+            if last_order_book is not None:
+                await websocket.send_json({
+                    "count":     len(last_order_book),
+                    "timestamp": last_fetch_time.isoformat() if last_fetch_time else None,
+                })
+            await asyncio.sleep(2)
+    except WebSocketDisconnect:
+        if websocket in websocket_clients:
+            websocket_clients.remove(websocket)
+
+
+async def zmq_rep_server():
+    """
+    ZMQ REP server â€” serves cached order book directly to verifier_service.
+    No HTTP overhead. Reuses in-memory cache.
+    """
+    ctx = zmq.asyncio.Context.instance()
+    socket = ctx.socket(zmq.REP)
+    socket.bind(f"tcp://*:{config.ZMQ_ORDERBOOK_REQ_PORT}")
+    logger.info(f"ðŸ“¡ OrderBookService: ZMQ REP listening on port {config.ZMQ_ORDERBOOK_REQ_PORT}")
+    while True:
+        try:
+            req = await socket.recv_json()
+            if req.get("command") == "get_order_book":
+                await socket.send_json({
+                    "order_book": last_order_book or [],
+                    "timestamp":  last_fetch_time.isoformat() if last_fetch_time else None,
+                })
+        except Exception as e:
+            logger.error(f"âŒ ZMQ REP error: {e}")
+            try:
+                await socket.send_json({"order_book": [], "error": str(e)})
+            except Exception:
+                pass
+
+
+@app.on_event("startup")
+async def startup_event():
+    state.db = Database()
+    logger.info("âœ… OrderBookService: Database connected")
+    await refresh_order_book()
+    asyncio.create_task(background_loop())
+    asyncio.create_task(zmq_rep_server())   # â† start ZMQ server alongside HTTP
+
+
+async def background_loop():
+    while True:
+        await refresh_order_book()
+        await asyncio.sleep(REFRESH_INTERVAL)   # â† 1s, was 5s
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8002)
+
+
+==================== FILE: order_book_fetcher.py ====================
+# from XTConnect import XTSConnect
+from datetime import datetime
+import json
+import pandas as pd
+from unittest import result
+from Connect import XTSConnect
+import cred
+# from MarketDataSocketClient import MDSocket_io
+# logging.basicConfig(level=logging.DEBUG)
+
+"""Investor client credentials"""
+API_KEY_I = cred.API_KEY_I
+API_SECRET_I = cred.API_SECRET_I
+
+API_KEY_M = cred.API_KEY_M
+API_SECRET_M = cred.API_SECRET_M
+
+clientID = "TEST49"
+XTS_API_BASE_URL = "https://developers.symphonyfintech.in/"
+source = "WebAPI"
+xt_i = XTSConnect(API_KEY_I, API_SECRET_I, source)
+xt_m = XTSConnect(API_KEY_M, API_SECRET_M, source)
+
+response_I = xt_i.interactive_login()
+response_M = xt_m.marketdata_login()
+
+def get_ltp(token):
+    instruments = [{'exchangeSegment': exchangeSegment, 'exchangeInstrumentID': token}]
+    response = (xt_m.send_subscription(instruments, "1512")).get('result', {}).get('listQuotes', [])
+    if response:
+        data = json.loads(response[0])
+        return data.get('LastTradedPrice')
+    return None
+option_chain = pd.DataFrame()
+print("Login_M", response_M.get('type'), "| Login_I", response_I.get('type'))
+symbol = "NIFTY"
+gap = 50
+exchangeSegment = 2
+expiryDate = datetime.strptime((xt_m.get_expiry_date(exchangeSegment=exchangeSegment,series="FUTIDX",symbol = symbol))['result'][0],"%Y-%m-%dT%H:%M:%S").strftime("%d%b%Y")
+
+fut_token = (xt_m.get_future_symbol(exchangeSegment = exchangeSegment,series = "FUTIDX",symbol = symbol,expiryDate = expiryDate)).get('result', [])
+exchange_instrument_id = (fut_token[0].get('ExchangeInstrumentID')if fut_token else None)
+fut_ltp = get_ltp(exchange_instrument_id)
+atm = round(fut_ltp/gap)*gap if fut_ltp else None
+
+print("Expiry Date: ", expiryDate, "| FUT LTP: ", fut_ltp, "| Strike Price: ", atm)
+strikes = [atm + i * gap for i in range(-15, 15 + 1)] if atm is not None else []
+print("Strikes: ", strikes)
+
+for strike in strikes:
+    ce_token = (xt_m.get_option_symbol(exchangeSegment = exchangeSegment,series="OPTIDX",symbol = symbol,expiryDate = expiryDate,optionType="CE",strikePrice = strike)).get('result', {})
+    pe_token = (xt_m.get_option_symbol(exchangeSegment = exchangeSegment,series="OPTIDX",symbol = symbol,expiryDate = expiryDate,optionType="PE",strikePrice = strike)).get('result', {})
+
+    ce_instrument_id = (ce_token[0].get('ExchangeInstrumentID')if ce_token else None)
+    pe_instrument_id = (pe_token[0].get('ExchangeInstrumentID')if pe_token else None)
+    ce_ltp = get_ltp(ce_instrument_id)
+    pe_ltp = get_ltp(pe_instrument_id)
+    row = {
+        "strike": strike,
+        "ce_token": ce_instrument_id,
+        "pe_token": pe_instrument_id,
+        "ce_ltp": ce_ltp,
+        "pe_ltp": pe_ltp
+    }
+    option_chain = pd.concat([option_chain, pd.DataFrame([row])], ignore_index=True) if 'option_chain' in locals() else pd.DataFrame([row])
+
+    print(f"Strike: {strike} | CE Token: {ce_instrument_id} | PE Token: {pe_instrument_id} | CE LTP: {ce_ltp} | PE LTP: {pe_ltp}")
+
+# clientID = "DV01"
+
+# ORDER_DICT = []
+
+# """Order book Request"""
+# print(option_chain.set_index('strike').at[atm, 'ce_token'])
+# ce_token = option_chain.set_index('strike').at[atm, 'ce_token']
+# response = xt_i.get_order_book(clientID)
+# print("Order Book: ", response)
+response = xt_i.place_order(
+    exchangeSegment=xt_i.EXCHANGE_NSEFO,
+    exchangeInstrumentID=int(option_chain.set_index('strike').at[atm, 'ce_token']),
+    productType=xt_i.PRODUCT_MIS,
+    orderType=xt_i.ORDER_TYPE_MARKET,
+    orderSide=xt_i.TRANSACTION_TYPE_BUY,
+    timeInForce=xt_i.VALIDITY_DAY,
+    disclosedQuantity=0,
+    orderQuantity=65,
+    limitPrice=0,
+    stopPrice=0,
+    orderUniqueIdentifier="test_buy",
+    clientID=clientID)
+
+response = xt_i.place_order(
+    exchangeSegment=xt_i.EXCHANGE_NSEFO,
+    exchangeInstrumentID=int(option_chain.set_index('strike').at[atm, 'pe_token']),
+    productType=xt_i.PRODUCT_MIS,
+    orderType=xt_i.ORDER_TYPE_MARKET,
+    orderSide=xt_i.TRANSACTION_TYPE_SELL,
+    timeInForce=xt_i.VALIDITY_DAY,
+    disclosedQuantity=0,
+    orderQuantity=65,
+    limitPrice=0,
+    stopPrice=0,
+    orderUniqueIdentifier="test",
+    clientID=clientID)
+print("Place Order: ", response)
+
+# oid = response['result']['AppOrderID']
+# ORDER_DICT.append(oid)
+
+
+
+"""Order book Request"""
+# response = xt_i.get_order_book(clientID)
+# print("Order Book: ", response)
+# response = xt.place_order(
+#     exchangeSegment=xt.EXCHANGE_NSEFO,
+#     exchangeInstrumentID=72164,
+#     productType=xt.PRODUCT_MIS,
+#     orderType=xt.ORDER_TYPE_MARKET,
+#     orderSide=xt.TRANSACTION_TYPE_BUY,
+#     timeInForce=xt.VALIDITY_DAY,
+#     disclosedQuantity=0,
+#     orderQuantity=75,
+#     limitPrice=0,
+#     stopPrice=0,
+#     orderUniqueIdentifier="abcdef",
+#     clientID=clientID)
+# print("Place Order: ", response)
+
+# oid = response['result']['AppOrderID']
+# ORDER_DICT.append(oid)
+
+
+
+# OrderStatus
+# CancelRejectReason
+
+
+
+# response = xt.cancelall_order(exchangeInstrumentID=2885,exchangeSegment=xt.EXCHANGE_NSECM)
+# print("Cancel all Orders: ", response)
+# response = xt.get_trade(clientID=clientID)
+# print("Trade Book: ", response)
+# response = xt.get_position_daywise(clientID=clientID)
+# print("Position by Day: ", response)
+
+"""Get Order History Request"""
+# response = xt.get_order_history(appOrderID=1110025806,clientID=clientID)
+# print("Order History: ", response)
+
+
+
+
+# response = xt.get_balance(clientID=213)
+# # print("Balance: ", response)
+
+# response = xt.get_profile(" ")
+# print("Profile: ", response)
+
+def check_enabled_exchanges():
+    """Check which exchanges are enabled for your account"""
+    try:
+        # Try to get holdings/profile
+        response = xt_i.get_profile(clientID=clientID)
+        
+        if response:
+            print("Enabled exchanges:",response)
+            # Check the profile for enabled segments
+            # Usually shows: NSECM, NSEFO, etc.
+    except Exception as e:
+        print(f"Check failed: {e}")
+
+check_enabled_exchanges()
+
+

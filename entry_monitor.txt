@@ -1,0 +1,103 @@
+import asyncio
+from utils.logger import logger
+from models.state import state
+from utils.helpers import get_ist_now
+from trading.builder import execute_prepared_build
+
+class EntryStraddleMonitor:
+    def __init__(self, trade_uid: str, config: dict):
+        self.trade_uid = trade_uid
+        self.config = config
+        self.running = False
+        self.target_premium = 0.0
+        
+        entry_target = self.config.get("entry_at_straddle")
+        if entry_target not in ("", None, 0, "0"):
+            try:
+                self.target_premium = float(entry_target)
+            except:
+                pass
+        self.last_checked_minute = None
+
+    async def start(self):
+        if self.target_premium > 0:
+            self.running = True
+            self.last_checked_minute = get_ist_now().replace(second=0, microsecond=0)
+            logger.info(f"✅ EntryStraddleMonitor started for {self.trade_uid} | Target: {self.target_premium}")
+
+    async def stop(self):
+        self.running = False
+        logger.info(f"🛑 EntryStraddleMonitor stopped for {self.trade_uid}")
+
+    async def check(self):
+        if not self.running or self.target_premium <= 0:
+            return
+
+        now = get_ist_now()
+        current_minute = now.replace(second=0, microsecond=0)
+        
+        # Fire exactly once per minute when the minute rolls over
+        if self.last_checked_minute == current_minute:
+            return
+
+        self.last_checked_minute = current_minute
+
+        trade_data = state.db.get_straddle_by_id(self.trade_uid)
+        if not trade_data or trade_data.get('status') != 'PENDING_ENTRY':
+            await self.stop()
+            return
+
+        symbol = trade_data.get("symbol")
+        chain_data = state.get_published_option_chain(symbol)
+        if not chain_data:
+            logger.warning(f"[{self.trade_uid}] [MINUTE POLL] No published chain available for {symbol}. Waiting...")
+            return
+
+        atm = chain_data.get("atm")
+        if not atm:
+            return
+            
+        atm_row = next((r for r in chain_data.get("chain", []) if r.get("strike") == atm), None)
+        if not atm_row:
+            return
+
+        ce_ltp = float(atm_row.get("ce_ltp", 0.0))
+        pe_ltp = float(atm_row.get("pe_ltp", 0.0))
+        current_straddle = ce_ltp + pe_ltp
+        
+        ce_iv = float(atm_row.get("ce_iv", 0.0))
+        pe_iv = float(atm_row.get("pe_iv", 0.0))
+        live_iv = (ce_iv + pe_iv) / 2.0
+
+        logger.info("-" * 80)
+        logger.info(f"⏳ [{self.trade_uid}] [MINUTE POLL] Evaluating Live Entry Conditions...")
+        logger.info(f"   Live ATM        : {atm}")
+        logger.info(f"   Live Premium    : {current_straddle:.2f}")
+        logger.info(f"   Target Premium  : {self.target_premium:.2f}")
+
+        # LOCAL IMPORT TO BREAK CIRCULAR DEPENDENCY
+        from config_builder import _compute_score_payload
+
+        # Re-evaluate LUT score dynamically using the live data
+        score_data = _compute_score_payload(
+            symbol=symbol,
+            live_iv=live_iv,
+            live_straddle=current_straddle,
+            chain_data=chain_data,
+            silent_logs=False  # Print the score block once per minute!
+        )
+        
+        sell_allowed = score_data.get("sell_allowed", False)
+        decision = score_data.get("decision", "NO")
+        
+        logger.info(f"   LUT Decision    : {decision}")
+        logger.info("-" * 80)
+
+        # Execute only if the price target is met AND the live LUT says YES
+        if current_straddle >= self.target_premium:
+            if sell_allowed:
+                logger.info(f"🎯 [{self.trade_uid}] TARGET MET ({current_straddle:.2f} >= {self.target_premium:.2f}) AND LUT IS YES! Handing off to execution.")
+                await self.stop()
+                asyncio.create_task(execute_prepared_build(self.trade_uid))
+            else:
+                logger.warning(f"⚠️ [{self.trade_uid}] Premium target met ({current_straddle:.2f}) but LUT Decision flipped to {decision}. Safety hold active. Waiting for next minute.")

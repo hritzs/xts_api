@@ -2,18 +2,19 @@
 Helper Utility Functions
 """
 from datetime import datetime, time
-from typing import List, Dict
+from typing import List, Dict,Any
 import config
 from dateutil import parser as date_parser
 from models.state import state
 from utils.logger import logger
 
 
+
 # Trading hours constants
-MARKET_OPEN = time(9, 15)
-MARKET_CLOSE = time(15, 30)
-EXPIRY_TIME = time(15, 30)
-TRADING_MINUTES_PER_DAY = 375  # 6h 15m
+MARKET_OPEN = time(0, 0)
+MARKET_CLOSE = time(23, 59)
+EXPIRY_TIME = time(23, 59)
+TRADING_MINUTES_PER_DAY = 385  # 6h 15m
 
 
 def get_ist_now() -> datetime:
@@ -25,6 +26,32 @@ def get_ist_date_str() -> str:
     """Get current date string (YYYY-MM-DD)"""
     return get_ist_now().strftime('%Y-%m-%d')
 
+def _safe_float(value, default: float = 0.0) -> float:
+    """Safely convert a value to a float, returning a default on failure."""
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            # Handle potential commas, percentage signs, or whitespace
+            value = value.replace(",", "").replace("%", "").strip()
+            if not value:
+                return default
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+def get_synthetic_reference_spot(chain_data: Dict[str, Any]) -> float:
+    if not isinstance(chain_data, dict):
+        return 0.0
+
+    try:
+        synthetic_spot = float(chain_data.get("synthetic_spot") or 0.0)
+        if synthetic_spot > 0:
+            return synthetic_spot
+    except Exception:
+        pass
+
+    return 0.0
 
 def get_strike_gap(symbol: str) -> int:
     """Get strike gap for symbol"""

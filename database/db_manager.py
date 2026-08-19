@@ -117,7 +117,7 @@ class Database:
                     
                     -- Premium & Status
                     total_premium REAL,
-                    status TEXT DEFAULT 'PENDING',
+                    status TEXT DEFAULT 'PENDING', 'PENDING_ENTRY',
                     execution_time REAL,
                     
                     -- Config-Based Trading
@@ -380,10 +380,10 @@ class Database:
 
                 # Prepare the values tuple, ensuring all keys are safely accessed
                 values = (
-                    straddle_data['straddle_id'],
-                    straddle_data.get('trade_uid', straddle_data['straddle_id']),
-                    straddle_data['symbol'],
-                    straddle_data['strike'],
+                    straddle_data.get('straddle_id', ''),
+                    straddle_data.get('trade_uid', straddle_data.get('straddle_id', '')),
+                    straddle_data.get('symbol', ''),
+                    straddle_data.get('strike', 0),
                     straddle_data.get('expiry', ''),
                     straddle_data.get('expiry_date'),
                     straddle_data.get('exchange_segment'),
@@ -399,8 +399,8 @@ class Database:
                     straddle_data.get('initial_ce_quantity', 0),
                     straddle_data.get('total_quantity', 0),
                     straddle_data.get('lot_size', 0),
-                    straddle_data['ce_token'],
-                    straddle_data['ce_symbol'],
+                    straddle_data.get('ce_token', 0),
+                    straddle_data.get('ce_symbol', ''),
                     straddle_data.get('ce_order_id', ''),
                     straddle_data.get('ce_app_order_id', ''),
                     straddle_data.get('ce_entry_price', 0),
@@ -409,8 +409,8 @@ class Database:
                     straddle_data.get('ce_theta', 0.0),
                     straddle_data.get('ce_vega', 0.0),
                     straddle_data.get('ce_iv', 0.0),
-                    straddle_data['pe_token'],
-                    straddle_data['pe_symbol'],
+                    straddle_data.get('pe_token', 0),
+                    straddle_data.get('pe_symbol', ''),
                     straddle_data.get('pe_order_id', ''),
                     straddle_data.get('pe_app_order_id', ''),
                     straddle_data.get('pe_entry_price', 0),
@@ -444,7 +444,7 @@ class Database:
                     ) VALUES ({','.join(['?'] * len(columns))})
                 """, values)
                 self.conn.commit()
-                logger.info(f"💾 Straddle saved: {straddle_data['straddle_id']}")
+                logger.info(f"💾 Straddle saved: {straddle_data.get('straddle_id', '')}")
             except Exception as e:
                 logger.error(f"Insert straddle error: {e}")
                 import traceback
@@ -633,12 +633,14 @@ class Database:
         with self.lock:
             try:
                 today = get_ist_date_str()
+                # Include all possible "active-like" statuses
+                active_statuses = ('FILLED', 'ACTIVE', 'BUILDING', 'PARTIAL', 'PARTIAL-SQF', 'HEDGING', 'ROLLING', 'SQUARING-OFF')
                 self.cursor.execute("""
-                    SELECT * FROM straddles 
-                    WHERE status IN ('FILLED', 'ACTIVE', 'PENDING','SQUARING-OFF') 
+                    SELECT * FROM straddles
+                    WHERE status IN {}
                     AND created_date = ?
                     ORDER BY created_at DESC
-                """, (today,))
+                """.format(active_statuses), (today,))
                 rows = self.cursor.fetchall()
                 result = []
                 for row in rows:
@@ -730,3 +732,47 @@ class Database:
         if self.conn:
             self.conn.close()
             logger.info("🔒 Database closed")
+
+    def get_pending_entry_straddles(self) -> list:
+        with self.lock:
+            try:
+                from utils.helpers import get_ist_date_str
+                import json
+                today = get_ist_date_str()
+                statuses = ("PENDING", "PENDING_ENTRY")
+                self.cursor.execute(f"SELECT * FROM straddles WHERE status IN {statuses} AND created_date = ? ORDER BY created_at DESC", (today,))
+                result = []
+                for row in self.cursor.fetchall():
+                    trade = dict(row)
+                    if trade.get("config"):
+                        try: trade["config"] = json.loads(trade["config"])
+                        except: pass
+                    result.append(trade)
+                return result
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Get pending entry straddles error: {e}")
+                return []
+
+    def get_open_straddles(self) -> list:
+        with self.lock:
+            try:
+                from utils.helpers import get_ist_date_str
+                import json
+                today = get_ist_date_str()
+                statuses = ("PENDING", "PENDING_ENTRY", "FILLED", "ACTIVE", "BUILDING", "PARTIAL", "PARTIAL-SQF", "HEDGING", "ROLLING", "SQUARING-OFF")
+                self.cursor.execute(f"SELECT * FROM straddles WHERE status IN {statuses} AND created_date = ? ORDER BY created_at DESC", (today,))
+                result = []
+                for row in self.fetchall():
+                    pass # Handled below
+                for row in self.cursor.fetchall():
+                    trade = dict(row)
+                    if trade.get("config"):
+                        try: trade["config"] = json.loads(trade["config"])
+                        except: pass
+                    result.append(trade)
+                return result
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Get open straddles error: {e}")
+                return []

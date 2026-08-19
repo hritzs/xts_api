@@ -8,7 +8,7 @@ import os
 import logging
 import json
 import socketio
-from typing import Optional, Callable, Any, List, Dict
+from typing import List, Dict
 
 
 class MDSocket_io:
@@ -38,11 +38,11 @@ class MDSocket_io:
         self.on_message1512_json_full = None
         self.on_message1512_json_partial = None
 
-        # ✅ Touchline — cash indices (NSE + BSE both use 1501)
+        # Touchline — cash indices
         self.on_message1501_json_full = None
         self.on_message1501_json_partial = None
 
-        # Market depth (not used for LTP, kept for completeness)
+        # Market depth
         self.on_message1502_json_full = None
         self.on_message1502_json_partial = None
 
@@ -82,24 +82,46 @@ class MDSocket_io:
         self.sid.on('connect_error', self._on_connect_error)
 
         # 1512 — FO LTP (options, futures)
-        self.sid.on('1512-json-full',    self._on_message1512_json_full)
+        self.sid.on('1512-json-full', self._on_message1512_json_full)
         self.sid.on('1512-json-partial', self._on_message1512_json_partial)
 
-        # 1501 — Touchline / cash index spot price ✅
-        self.sid.on('1501-json-full',    self._on_message1501_json_full)
+        # 1501 — Touchline / cash index spot price
+        self.sid.on('1501-json-full', self._on_message1501_json_full)
         self.sid.on('1501-json-partial', self._on_message1501_json_partial)
 
         # 1502 — Market Depth
-        self.sid.on('1502-json-full',    self._on_message1502_json_full)
+        self.sid.on('1502-json-full', self._on_message1502_json_full)
         self.sid.on('1502-json-partial', self._on_message1502_json_partial)
 
         # 1505 — Candle
-        self.sid.on('1505-json-full',    self._on_message1505_json_full)
+        self.sid.on('1505-json-full', self._on_message1505_json_full)
         self.sid.on('1505-json-partial', self._on_message1505_json_partial)
 
         # 1510 — Open Interest
-        self.sid.on('1510-json-full',    self._on_message1510_json_full)
+        self.sid.on('1510-json-full', self._on_message1510_json_full)
         self.sid.on('1510-json-partial', self._on_message1510_json_partial)
+
+        logging.info("✅ Socket.IO internal event handlers registered for 1501/1502/1510/1512/1505")
+
+    def log_callback_wiring_status(self):
+        """
+        Call this after your external wiring code assigns callbacks.
+        Verifies that handlers are actually attached.
+        """
+        logging.info(
+            "🧩 Callback wiring status | "
+            f"connect={self.on_connect is not None} "
+            f"disconnect={self.on_disconnect is not None} "
+            f"error={self.on_error is not None} | "
+            f"1512_full={self.on_message1512_json_full is not None} "
+            f"1512_partial={self.on_message1512_json_partial is not None} | "
+            f"1501_full={self.on_message1501_json_full is not None} "
+            f"1501_partial={self.on_message1501_json_partial is not None} | "
+            f"1502_full={self.on_message1502_json_full is not None} "
+            f"1502_partial={self.on_message1502_json_partial is not None} | "
+            f"1510_full={self.on_message1510_json_full is not None} "
+            f"1510_partial={self.on_message1510_json_partial is not None}"
+        )
 
     def connect(self, headers: dict = None, transports: str = 'websocket',
                 namespaces: list = None,
@@ -108,6 +130,8 @@ class MDSocket_io:
         try:
             logging.info("🚀 Connecting to XTS Market Data Socket...")
             logging.info(f"📋 URL: {self.connection_url[:80]}...")
+            self.log_callback_wiring_status()
+
             self.sid.connect(
                 self.connection_url,
                 headers=headers or {},
@@ -124,10 +148,11 @@ class MDSocket_io:
             logging.error(f"❌ Socket connect error: {e}")
             raise
 
-    # ── Connection handlers ──────────────────────────────────────────────────
+    # ── Connection handlers ─────────────────────────────────────────────
 
     def _on_connect(self):
         logging.info("✅ XTS Market Data Socket CONNECTED")
+        self.log_callback_wiring_status()
         if self.on_connect:
             self.on_connect()
 
@@ -141,13 +166,17 @@ class MDSocket_io:
         if self.on_error:
             self.on_error(error)
 
-    # ── 1512 handlers ────────────────────────────────────────────────────────
+    # ── 1512 handlers ──────────────────────────────────────────────────
 
     def _on_message1512_json_full(self, data):
         try:
             if isinstance(data, str):
                 data = json.loads(data)
-            logging.debug(f"🔔 1512 FULL: Token={data.get('ExchangeInstrumentID')}, LTP={data.get('LastTradedPrice')}")
+            logging.debug(
+                f"🔔 1512 FULL: Token={data.get('ExchangeInstrumentID')}, "
+                f"LTP={data.get('LastTradedPrice')}, "
+                f"cb={self.on_message1512_json_full is not None}"
+            )
             if self.on_message1512_json_full:
                 self.on_message1512_json_full(data)
         except Exception as e:
@@ -157,19 +186,27 @@ class MDSocket_io:
         try:
             if isinstance(data, str):
                 data = json.loads(data)
-            logging.debug(f"🔔 1512 PARTIAL: Token={data.get('ExchangeInstrumentID')}, LTP={data.get('LastTradedPrice')}")
+            logging.debug(
+                f"🔔 1512 PARTIAL: Token={data.get('ExchangeInstrumentID')}, "
+                f"LTP={data.get('LastTradedPrice')}, "
+                f"cb={self.on_message1512_json_partial is not None}"
+            )
             if self.on_message1512_json_partial:
                 self.on_message1512_json_partial(data)
         except Exception as e:
             logging.error(f"1512 partial handler error: {e}")
 
-    # ── 1501 handlers — Touchline / cash index spot ✅ ─────────────────────
+    # ── 1501 handlers ──────────────────────────────────────────────────
 
     def _on_message1501_json_full(self, data):
         try:
             if isinstance(data, str):
                 data = json.loads(data)
-            logging.debug(f"🔔 1501 FULL: Token={data.get('ExchangeInstrumentID')}, LTP={data.get('LastTradedPrice')}")
+            logging.debug(
+                f"🔔 1501 FULL: Token={data.get('ExchangeInstrumentID')}, "
+                f"LTP={data.get('LastTradedPrice')}, "
+                f"cb={self.on_message1501_json_full is not None}"
+            )
             if self.on_message1501_json_full:
                 self.on_message1501_json_full(data)
         except Exception as e:
@@ -179,21 +216,30 @@ class MDSocket_io:
         try:
             if isinstance(data, str):
                 data = json.loads(data)
-            logging.debug(f"🔔 1501 PARTIAL: Token={data.get('ExchangeInstrumentID')}, LTP={data.get('LastTradedPrice')}")
+            logging.debug(
+                f"🔔 1501 PARTIAL: Token={data.get('ExchangeInstrumentID')}, "
+                f"LTP={data.get('LastTradedPrice')}, "
+                f"cb={self.on_message1501_json_partial is not None}"
+            )
             if self.on_message1501_json_partial:
                 self.on_message1501_json_partial(data)
         except Exception as e:
             logging.error(f"1501 partial handler error: {e}")
 
-    # ── 1502 handlers — Market Depth ─────────────────────────────────────────
+    # ── 1502 handlers ──────────────────────────────────────────────────
 
     def _on_message1502_json_full(self, data):
         try:
             if isinstance(data, str):
                 data = json.loads(data)
-            logging.debug(f"🔔 1502 FULL: Token={data.get('ExchangeInstrumentID')}")
+            logging.debug(
+                f"🔔 1502 FULL: Token={data.get('ExchangeInstrumentID')}, "
+                f"cb={self.on_message1502_json_full is not None}"
+            )
             if self.on_message1502_json_full:
                 self.on_message1502_json_full(data)
+            else:
+                logging.warning("⚠️ 1502 FULL event received but no external callback is wired")
         except Exception as e:
             logging.error(f"1502 full handler error: {e}")
 
@@ -201,13 +247,18 @@ class MDSocket_io:
         try:
             if isinstance(data, str):
                 data = json.loads(data)
-            logging.debug(f"🔔 1502 PARTIAL: Token={data.get('ExchangeInstrumentID')}")
+            logging.debug(
+                f"🔔 1502 PARTIAL: Token={data.get('ExchangeInstrumentID')}, "
+                f"cb={self.on_message1502_json_partial is not None}"
+            )
             if self.on_message1502_json_partial:
                 self.on_message1502_json_partial(data)
+            else:
+                logging.warning("⚠️ 1502 PARTIAL event received but no external callback is wired")
         except Exception as e:
             logging.error(f"1502 partial handler error: {e}")
 
-    # ── 1505/1510 handlers ───────────────────────────────────────────────────
+    # ── 1505 / 1510 handlers ───────────────────────────────────────────
 
     def _on_message1505_json_full(self, data):
         logging.debug("1505 FULL received")
@@ -219,7 +270,10 @@ class MDSocket_io:
         try:
             if isinstance(data, str):
                 data = json.loads(data)
-            logging.debug(f"🔔 1510 FULL: Token={data.get('ExchangeInstrumentID')}")
+            logging.debug(
+                f"🔔 1510 FULL: Token={data.get('ExchangeInstrumentID')}, "
+                f"cb={self.on_message1510_json_full is not None}"
+            )
             if self.on_message1510_json_full:
                 self.on_message1510_json_full(data)
         except Exception as e:
@@ -229,13 +283,16 @@ class MDSocket_io:
         try:
             if isinstance(data, str):
                 data = json.loads(data)
-            logging.debug(f"🔔 1510 PARTIAL: Token={data.get('ExchangeInstrumentID')}")
+            logging.debug(
+                f"🔔 1510 PARTIAL: Token={data.get('ExchangeInstrumentID')}, "
+                f"cb={self.on_message1510_json_partial is not None}"
+            )
             if self.on_message1510_json_partial:
                 self.on_message1510_json_partial(data)
         except Exception as e:
             logging.error(f"1510 partial handler error: {e}")
 
-    # ── Subscription ─────────────────────────────────────────────────────────
+    # ── Subscription ───────────────────────────────────────────────────
 
     def send_subscription(self, instruments: List[Dict], message_type: int = 1512) -> Dict:
         try:
@@ -265,7 +322,7 @@ class MDSocket_io:
                 'xtsMessageCode': message_type
             }
             self.sid.emit('leave', payload)
-            logging.info(f"📡 Unsubscribed: {len(instruments)} instruments")
+            logging.info(f"📡 Unsubscribed: {len(instruments)} instruments (code={message_type})")
             return {'type': 'success', 'count': len(instruments)}
 
         except Exception as e:

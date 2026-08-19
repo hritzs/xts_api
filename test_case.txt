@@ -1,0 +1,163 @@
+] NIFTY 24150 | ce_iv=9.71 pe_iv=9.71 ce_ltp=222.3 pe_ltp=38.7 syn=24333.2
+[marketdata] 2026-07-03 11:22:28 [INFO] 🚚 Fetching bulk depth for 50 instruments in segment 12 using code 1502 (batch 1)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 50 instruments in segment 12 using code 1502 (batch 1)...
+[marketdata] 2026-07-03 11:22:28 [INFO] 🚚 Fetching bulk depth for 12 instruments in segment 12 using code 1502 (batch 2)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 12 instruments in segment 12 using code 1502 (batch 2)...
+[snapshot] 2026-07-03 11:22:29 [INFO] 📸 Snapshotter: cycle #906, 0 trades, 1 WS clients
+[main] 2026-07-03 11:22:36 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:61597 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:37 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:61597 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[marketdata] 2026-07-03 11:22:38 [INFO] 🚚 Fetching bulk depth for 50 instruments in segment 2 using code 1502 (batch 1)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 50 instruments in segment 2 using code 1502 (batch 1)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 12 instruments in segment 2 using code 1502 (batch 2)...
+[marketdata] 2026-07-03 11:22:38 [INFO] 🚚 Fetching bulk depth for 12 instruments in segment 2 using code 1502 (batch 2)...
+[marketdata] 2026-07-03 11:22:38 [INFO] [CHAIN-SST] NIFTY 24150 | ce_iv=9.7 pe_iv=9.7 ce_ltp=221.1 pe_ltp=38.7 syn=24332.850000000002
+[marketdata] INFO:dashboard:[CHAIN-SST] NIFTY 24150 | ce_iv=9.7 pe_iv=9.7 ce_ltp=221.1 pe_ltp=38.7 syn=24332.850000000002
+[marketdata] 2026-07-03 11:22:39 [INFO] 🚚 Fetching bulk depth for 50 instruments in segment 12 using code 1502 (batch 1)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 50 instruments in segment 12 using code 1502 (batch 1)...
+[marketdata] 2026-07-03 11:22:39 [INFO] 🚚 Fetching bulk depth for 12 instruments in segment 12 using code 1502 (batch 2)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 12 instruments in segment 12 using code 1502 (batch 2)...
+[main] 2026-07-03 11:22:40 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:61597 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:43 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:61597 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:46 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:61597 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[marketdata] 2026-07-03 11:22:49 [INFO] 🚚 Fetching bulk depth for 50 instruments in segment 2 using code 1502 (batch 1)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 50 instruments in segment 2 using code 1502 (batch 1)...
+[marketdata] 2026-07-03 11:22:49 [INFO] 🚚 Fetching bulk depth for 12 instruments in segment 2 using code 1502 (batch 2)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 12 instruments in segment 2 using code 1502 (batch 2)...
+[marketdata] 2026-07-03 11:22:49 [INFO] [CHAIN-SST] NIFTY 24150 | ce_iv=9.69 pe_iv=9.69 ce_ltp=221.7 pe_ltp=38.4 syn=24333.85
+[marketdata] INFO:dashboard:[CHAIN-SST] NIFTY 24150 | ce_iv=9.69 pe_iv=9.69 ce_ltp=221.7 pe_ltp=38.4 syn=24333.85
+[marketdata] 2026-07-03 11:22:49 [INFO] 🚚 Fetching bulk depth for 50 instruments in segment 12 using code 1502 (batch 1)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 50 instruments in segment 12 using code 1502 (batch 1)...
+[marketdata] 2026-07-03 11:22:49 [INFO] 🚚 Fetching bulk depth for 12 instruments in segment 12 using code 1502 (batch 2)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 12 instruments in segment 12 using code 1502 (batch 2)...
+[main] 2026-07-03 11:22:49 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:61597 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:51 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:61597 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:51 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:50586 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[reconciler] 2026-07-03 11:22:52 [INFO] 💚 order_reconciler alive | orders=8 | verified=0 | pending=0
+[main] 2026-07-03 11:22:52 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:50586 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:52 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:64087 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:55 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:64087 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:55 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:64087 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:55 [INFO] ====================================================================================================
+[main] 2026-07-03 11:22:55 [INFO] 📥 API: Config-based build request
+[main] 2026-07-03 11:22:55 [INFO]    Symbol: NIFTY
+[main] 2026-07-03 11:22:55 [INFO]    Size: 1 lots
+[main] 2026-07-03 11:22:55 [INFO]    Entry: 09:18:00, Exit: 15:27:00
+[main] 2026-07-03 11:22:55 [INFO]    Rule: Sell only if Total Score > 55
+[main] 2026-07-03 11:22:55 [INFO]    Formula: DTE Score + IV/IDV Score + Straddle Score + Build IV Score
+[main] 2026-07-03 11:22:55 [INFO]    Manual Overrides: latest_idv=None, historical_idv=None, prev_day_straddle=None
+[main] 2026-07-03 11:22:55 [INFO]    Straddle Stop %: 1.0%
+[main] 2026-07-03 11:22:55 [INFO]    SL BPS: 14.0
+[main] 2026-07-03 11:22:55 [INFO]    Buy/Sell Buffer: 2/2 ticks
+[main] 2026-07-03 11:22:55 [INFO] ====================================================================================================
+[main] 2026-07-03 11:22:55 [INFO] 💾 Straddle saved: ny030726091800a
+[main] 2026-07-03 11:22:55 [INFO] ✅ Created PENDING trade record for ny030726091800a.
+[main] INFO:     172.16.9.88:64087 - "POST /api/straddle/config-build HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:55 [INFO] ====================================================================================================
+[main] 2026-07-03 11:22:55 [INFO] CONFIG BUILD: NIFTY
+[main] 2026-07-03 11:22:55 [INFO]    Entry: 09:18:00, Exit: 15:27:00
+[main] 2026-07-03 11:22:55 [INFO]    Size: 1 lots
+[main] 2026-07-03 11:22:55 [INFO]    Rule: Total Score > 55
+[main] 2026-07-03 11:22:55 [INFO]    Formula: DTE Score + IV/IDV Score + Straddle Score + Build IV Score
+[main] 2026-07-03 11:22:55 [INFO]    Manual Overrides: latest_idv=None, historical_idv=None, prev_day_straddle=None
+[main] 2026-07-03 11:22:55 [INFO]    SL Start: 11:08:00
+[main] 2026-07-03 11:22:55 [INFO]    Hedge Start: 11:08:00
+[main] 2026-07-03 11:22:55 [INFO]    Roll Start: 11:08:00
+[main] 2026-07-03 11:22:55 [INFO] ====================================================================================================
+[main] 2026-07-03 11:22:55 [INFO] 🔍 CHECKING SCORE FILTERS @ 11:22:55.684748
+[main] 2026-07-03 11:22:55 [INFO] ====================================================================================================
+[main] 2026-07-03 11:22:55 [INFO] 📊 SCORE CHECK: NIFTY
+[main] 2026-07-03 11:22:55 [INFO]   Expiry               : 07Jul2026
+[main] 2026-07-03 11:22:55 [INFO]   Current DTE          : 5
+[main] 2026-07-03 11:22:55 [INFO]   DTE Bucket           : 5
+[main] 2026-07-03 11:22:55 [INFO]   DTE Label            : DTE5
+[main] 2026-07-03 11:22:55 [INFO]   DTE Score            : 25
+[main] 2026-07-03 11:22:55 [INFO]   Live IV (%)          : 8.94
+[main] 2026-07-03 11:22:55 [INFO]   Live IV (decimal)    : 0.0894
+[main] 2026-07-03 11:22:55 [INFO]   Live Straddle        : 197.15
+[main] 2026-07-03 11:22:55 [INFO]   Historical IDV       : 0.119486 (auto)
+[main] 2026-07-03 11:22:55 [INFO]   IDV Used             : 0.119486
+[main] 2026-07-03 11:22:55 [INFO]   Prev Day Straddle    : 222.6 (auto)
+[main] 2026-07-03 11:22:55 [INFO]   IV/IDV Ratio         : 0.748204
+[main] 2026-07-03 11:22:55 [INFO]   Straddle Ratio       : 1.12909
+[main] 2026-07-03 11:22:55 [INFO]   IV/IDV Score         : -62
+[main] 2026-07-03 11:22:55 [INFO]   Straddle Score       : 5
+[main] 2026-07-03 11:22:55 [INFO]   Build IV Score       : -20
+[main] 2026-07-03 11:22:55 [INFO]   Total Score          : -52
+[main] 2026-07-03 11:22:55 [INFO]   Score Available      : True
+[main] 2026-07-03 11:22:55 [INFO]   Score Passed         : False
+[main] 2026-07-03 11:22:55 [INFO]   Sell Allowed         : False
+[main] 2026-07-03 11:22:55 [INFO]   Manual Load Needed   : False
+[main] 2026-07-03 11:22:55 [INFO] ====================================================================================================
+[main] 2026-07-03 11:22:55 [INFO] ### SCORE-BUILDER: ENTERING MINUTE-END SCHEDULING BLOCK ###
+[main] 2026-07-03 11:22:55 [INFO]   Next score check scheduled in 4.3s (at 11:23:00).
+[main] 2026-07-03 11:22:55 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:64087 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:22:58 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:64087 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[marketdata] 2026-07-03 11:22:59 [INFO] 🚚 Fetching bulk depth for 50 instruments in segment 2 using code 1502 (batch 1)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 50 instruments in segment 2 using code 1502 (batch 1)...
+[marketdata] 2026-07-03 11:22:59 [INFO] 🚚 Fetching bulk depth for 12 instruments in segment 2 using code 1502 (batch 2)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 12 instruments in segment 2 using code 1502 (batch 2)...
+[marketdata] 2026-07-03 11:22:59 [INFO] [CHAIN-SST] NIFTY 24150 | ce_iv=9.7 pe_iv=9.7 ce_ltp=222.1 pe_ltp=38.45 syn=24334.100000000002
+[marketdata] INFO:dashboard:[CHAIN-SST] NIFTY 24150 | ce_iv=9.7 pe_iv=9.7 ce_ltp=222.1 pe_ltp=38.45 syn=24334.100000000002
+[marketdata] 2026-07-03 11:22:59 [INFO] 🚚 Fetching bulk depth for 50 instruments in segment 12 using code 1502 (batch 1)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 50 instruments in segment 12 using code 1502 (batch 1)...
+[marketdata] 2026-07-03 11:22:59 [INFO] 🚚 Fetching bulk depth for 12 instruments in segment 12 using code 1502 (batch 2)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 12 instruments in segment 12 using code 1502 (batch 2)...
+[main] 2026-07-03 11:23:00 [INFO] 🔍 CHECKING SCORE FILTERS @ 11:23:00.129822
+[snapshot] 2026-07-03 11:23:00 [INFO] 📸 Snapshotter: cycle #937, 0 trades, 1 WS clients
+[main] 2026-07-03 11:23:00 [INFO] ====================================================================================================
+[main] 2026-07-03 11:23:00 [INFO] 📊 SCORE CHECK: NIFTY
+[main] 2026-07-03 11:23:00 [INFO]   Expiry               : 07Jul2026
+[main] 2026-07-03 11:23:00 [INFO]   Current DTE          : 5
+[main] 2026-07-03 11:23:00 [INFO]   DTE Bucket           : 5
+[main] 2026-07-03 11:23:00 [INFO]   DTE Label            : DTE5
+[main] 2026-07-03 11:23:00 [INFO]   DTE Score            : 25
+[main] 2026-07-03 11:23:00 [INFO]   Live IV (%)          : 8.94
+[main] 2026-07-03 11:23:00 [INFO]   Live IV (decimal)    : 0.0894
+[main] 2026-07-03 11:23:00 [INFO]   Live Straddle        : 197.15
+[main] 2026-07-03 11:23:00 [INFO]   Historical IDV       : 0.119486 (auto)
+[main] 2026-07-03 11:23:00 [INFO]   IDV Used             : 0.119486
+[main] 2026-07-03 11:23:00 [INFO]   Prev Day Straddle    : 222.6 (auto)
+[main] 2026-07-03 11:23:00 [INFO]   IV/IDV Ratio         : 0.748204
+[main] 2026-07-03 11:23:00 [INFO]   Straddle Ratio       : 1.12909
+[main] 2026-07-03 11:23:00 [INFO]   IV/IDV Score         : -62
+[main] 2026-07-03 11:23:00 [INFO]   Straddle Score       : 5
+[main] 2026-07-03 11:23:00 [INFO]   Build IV Score       : -20
+[main] 2026-07-03 11:23:00 [INFO]   Total Score          : -52
+[main] 2026-07-03 11:23:00 [INFO]   Score Available      : True
+[main] 2026-07-03 11:23:00 [INFO]   Score Passed         : False
+[main] 2026-07-03 11:23:00 [INFO]   Sell Allowed         : False
+[main] 2026-07-03 11:23:00 [INFO]   Manual Load Needed   : False
+[main] 2026-07-03 11:23:00 [INFO] ====================================================================================================
+[main] 2026-07-03 11:23:00 [INFO] ### SCORE-BUILDER: ENTERING MINUTE-END SCHEDULING BLOCK ###
+[main] 2026-07-03 11:23:00 [INFO]   Next score check scheduled in 59.9s (at 11:24:00).
+[main] 2026-07-03 11:23:01 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:64087 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:23:04 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:64087 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[main] 2026-07-03 11:23:07 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6
+[main] INFO:     172.16.9.88:64087 - "POST /api/straddle/config-score-preview HTTP/1.1" 200 OK
+[marketdata] 2026-07-03 11:23:09 [INFO] 🚚 Fetching bulk depth for 50 instruments in segment 2 using code 1502 (batch 1)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 50 instruments in segment 2 using code 1502 (batch 1)...
+[marketdata] 2026-07-03 11:23:09 [INFO] 🚚 Fetching bulk depth for 12 instruments in segment 2 using code 1502 (batch 2)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 12 instruments in segment 2 using code 1502 (batch 2)...
+[marketdata] 2026-07-03 11:23:09 [INFO] [CHAIN-SST] NIFTY 24150 | ce_iv=9.71 pe_iv=9.71 ce_ltp=222.35 pe_ltp=38.4 syn=24334.4
+[marketdata] INFO:dashboard:[CHAIN-SST] NIFTY 24150 | ce_iv=9.71 pe_iv=9.71 ce_ltp=222.35 pe_ltp=38.4 syn=24334.4
+[marketdata] 2026-07-03 11:23:09 [INFO] 🚚 Fetching bulk depth for 50 instruments in segment 12 using code 1502 (batch 1)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 50 instruments in segment 12 using code 1502 (batch 1)...
+[marketdata] 2026-07-03 11:23:09 [INFO] 🚚 Fetching bulk depth for 12 instruments in segment 12 using code 1502 (batch 2)...
+[marketdata] INFO:dashboard:🚚 Fetching bulk depth for 12 instruments in segment 12 using code 1502 (batch 2)...
+[main] 2026-07-03 11:23:10 [INFO] [SCORE-DEBUG] NIFTY | prev_day_straddle(auto) = 222.6

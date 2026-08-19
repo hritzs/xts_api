@@ -15,9 +15,8 @@ import asyncio
 import math
 import httpx
 from typing import Set, List, Dict, Optional
-from datetime import datetime
 from dataclasses import dataclass
-
+from datetime import datetime, timezone
 from utils.logger import logger
 from models.state import state
 from utils.greeks import calculate_all_greeks, calculate_greeks_from_iv
@@ -32,7 +31,22 @@ from trading.chain_provider import (
 
 _websocket_clients: Set = set()
 
+def _safe_float(v, default=0.0):
+    try:
+        if v is None or v == "":
+            return default
+        return float(v)
+    except Exception:
+        return default
 
+
+def _safe_int(v, default=0):
+    try:
+        if v is None or v == "":
+            return default
+        return int(v)
+    except Exception:
+        return default
 # ============================================================================
 # DATACLASSES
 # ============================================================================
@@ -66,6 +80,230 @@ class PositionGreeks:
     def net_vega(self) -> float:
         return self.vega * self.quantity
 
+# ============================================================================
+# CHAIN NORMALISATION / ENRICHMENT HELPERS
+# ============================================================================
+
+_DERIVED_ROW_FIELDS = (
+    "ce_iv", "pe_iv",
+    "ce_delta", "ce_gamma", "ce_theta", "ce_vega",
+    "pe_delta", "pe_gamma", "pe_theta", "pe_vega",
+)
+
+def _normalise_iv(raw_iv: float) -> float:
+    """
+    Convert solver IV to percentage.
+    Handles either decimal IV (0.1185) or already-percent IV (11.85).
+    """
+    if raw_iv is None:
+        return 0.0
+    try:
+        raw_iv = float(raw_iv)
+    except Exception:
+        return 0.0
+
+    if raw_iv <= 0:
+        return 0.0
+
+    if raw_iv <= 1.0:
+        return round(raw_iv * 100.0, 4)
+
+    return round(raw_iv, 4)
+
+
+def _zero_row_derived_fields(row: dict) -> dict:
+    for k in _DERIVED_ROW_FIELDS:
+        row[k] = 0.0
+    return row
+
+
+def _strip_chain_derived_fields(chain: dict) -> dict:
+    """
+    Builder is raw-only. Remove any IV/Greeks it may have injected.
+    """
+    if not isinstance(chain, dict):
+        return chain
+
+    for row in chain.get("chain", []):
+        if isinstance(row, dict):
+            _zero_row_derived_fields(row)
+
+    return chain
+
+def _state_get_quote(token, default=None):
+    try:
+        token = int(token)
+    except Exception:
+        return default if default is not None else {}
+
+    try:
+        quotes = getattr(state, "quotes", None)
+        if isinstance(quotes, dict):
+            return quotes.get(token, default if default is not None else {})
+    except Exception:
+        pass
+
+    return default if default is not None else {}
+
+def _merge_live_market_fields(old_chain: Optional[dict], new_chain: dict) -> dict:
+    """
+    WebSocket-first merge:
+    - Prefer fresh state.quotes for all live CE/PE quote fields
+    - Fallback to new_chain values
+    - Fallback to old_chain values only if websocket/new values are missing
+    - Never preserve IV/Greeks here
+    """
+    if not isinstance(new_chain, dict):
+        return new_chain
+
+    new_chain = _strip_chain_derived_fields(new_chain)
+
+    old_rows = {}
+    if old_chain and isinstance(old_chain, dict):
+        old_rows = {
+            r.get("strike"): r
+            for r in old_chain.get("chain", [])
+            if isinstance(r, dict) and r.get("strike") is not None
+        }
+
+    def pick_live_number(*vals, default=0.0):
+        for v in vals:
+            try:
+                if v is None or v == "":
+                    continue
+                fv = float(v)
+                if fv > 0:
+                    return fv
+            except Exception:
+                continue
+        return default
+
+    def pick_live_int(*vals, default=0):
+        for v in vals:
+            try:
+                if v is None or v == "":
+                    continue
+                iv = int(v)
+                if iv > 0:
+                    return iv
+            except Exception:
+                continue
+        return default
+
+    for new_row in new_chain.get("chain", []):
+        if not isinstance(new_row, dict):
+            continue
+
+        strike = new_row.get("strike")
+        old_row = old_rows.get(strike, {}) if strike is not None else {}
+
+        ce_token = _safe_int(new_row.get("ce_token"))
+        pe_token = _safe_int(new_row.get("pe_token"))
+
+        ce_q = _state_get_quote(ce_token) if ce_token else {}
+        pe_q = _state_get_quote(pe_token) if pe_token else {}
+
+        new_row["ce_ltp"] = pick_live_number(
+            ce_q.get("ltp"), ce_q.get("last_price"),
+            new_row.get("ce_ltp"),
+            old_row.get("ce_ltp"),
+            default=0.0
+        )
+        new_row["pe_ltp"] = pick_live_number(
+            pe_q.get("ltp"), pe_q.get("last_price"),
+            new_row.get("pe_ltp"),
+            old_row.get("pe_ltp"),
+            default=0.0
+        )
+
+        new_row["ce_bid"] = pick_live_number(
+            ce_q.get("bid"), ce_q.get("bid_price"),
+            new_row.get("ce_bid"),
+            old_row.get("ce_bid"),
+            default=0.0
+        )
+        new_row["ce_ask"] = pick_live_number(
+            ce_q.get("ask"), ce_q.get("ask_price"),
+            new_row.get("ce_ask"),
+            old_row.get("ce_ask"),
+            default=0.0
+        )
+        new_row["pe_bid"] = pick_live_number(
+            pe_q.get("bid"), pe_q.get("bid_price"),
+            new_row.get("pe_bid"),
+            old_row.get("pe_bid"),
+            default=0.0
+        )
+        new_row["pe_ask"] = pick_live_number(
+            pe_q.get("ask"), pe_q.get("ask_price"),
+            new_row.get("pe_ask"),
+            old_row.get("pe_ask"),
+            default=0.0
+        )
+
+        new_row["ce_bid_qty"] = pick_live_int(
+            ce_q.get("bid_qty"),
+            new_row.get("ce_bid_qty"),
+            old_row.get("ce_bid_qty"),
+            default=0
+        )
+        new_row["ce_ask_qty"] = pick_live_int(
+            ce_q.get("ask_qty"),
+            new_row.get("ce_ask_qty"),
+            old_row.get("ce_ask_qty"),
+            default=0
+        )
+        new_row["pe_bid_qty"] = pick_live_int(
+            pe_q.get("bid_qty"),
+            new_row.get("pe_bid_qty"),
+            old_row.get("pe_bid_qty"),
+            default=0
+        )
+        new_row["pe_ask_qty"] = pick_live_int(
+            pe_q.get("ask_qty"),
+            new_row.get("pe_ask_qty"),
+            old_row.get("pe_ask_qty"),
+            default=0
+        )
+
+        from datetime import datetime, timezone
+        _now = datetime.now(timezone.utc).isoformat()
+        new_row["ce_quote_ts"] = ce_q.get("quote_ts") or old_row.get("ce_quote_ts") or _now
+        new_row["pe_quote_ts"] = pe_q.get("quote_ts") or old_row.get("pe_quote_ts") or _now
+
+        # Compute real-time Greeks and Implied Volatility
+        try:
+            ce_ltp = float(new_row.get("ce_ltp") or 0.0)
+            pe_ltp = float(new_row.get("pe_ltp") or 0.0)
+            strike_val = float(new_row.get("strike") or 0.0)
+            syn_spot = float(new_chain.get("synthetic_spot") or new_chain.get("fut_ltp") or 0.0)
+            dte_val = float(new_chain.get("dte") or 1.0)
+        
+            if ce_ltp > 0 and strike_val > 0 and syn_spot > 0:
+                ce_g = calculate_all_greeks("call", strike_val, syn_spot, dte_val, ce_ltp, 0.0)
+                new_row["ce_iv"] = round(float(ce_g.get("iv", 0.0)) * 100.0, 2)
+                new_row["ce_delta"] = round(float(ce_g.get("delta", 0.0)), 4)
+                new_row["ce_gamma"] = round(float(ce_g.get("gamma", 0.0)), 6)
+                new_row["ce_theta"] = round(float(ce_g.get("theta", 0.0)), 4)
+                new_row["ce_vega"] = round(float(ce_g.get("vega", 0.0)), 4)
+        
+            if pe_ltp > 0 and strike_val > 0 and syn_spot > 0:
+                pe_g = calculate_all_greeks("put", strike_val, syn_spot, dte_val, pe_ltp, 0.0)
+                new_row["pe_iv"] = round(float(pe_g.get("iv", 0.0)) * 100.0, 2)
+                new_row["pe_delta"] = round(float(pe_g.get("delta", 0.0)), 4)
+                new_row["pe_gamma"] = round(float(pe_g.get("gamma", 0.0)), 6)
+                new_row["pe_theta"] = round(float(pe_g.get("theta", 0.0)), 4)
+                new_row["pe_vega"] = round(float(pe_g.get("vega", 0.0)), 4)
+        except Exception as calc_err:
+            _zero_row_derived_fields(new_row)
+
+    if (new_chain.get("fut_ltp") or 0) <= 0 and (old_chain or {}).get("fut_ltp", 0) > 0:
+        new_chain["fut_ltp"] = old_chain.get("fut_ltp", 0.0)
+
+    if (new_chain.get("synthetic_spot") or 0) <= 0 and (old_chain or {}).get("synthetic_spot", 0) > 0:
+        new_chain["synthetic_spot"] = old_chain.get("synthetic_spot", 0.0)
+
+    return new_chain
 
 @dataclass
 class TradeGreeks:
@@ -111,6 +349,7 @@ async def broadcast_message(message: dict):
     for client in list(_websocket_clients):
         try:
             await asyncio.wait_for(client.send_json(message), timeout=2.0)
+
         except Exception as e:
             logger.warning(f"WS broadcast failed: {type(e).__name__} - {e}")
             disconnected.add(client)
@@ -145,33 +384,126 @@ async def websocket_keepalive_loop():
 
 async def update_option_chain_cache_loop(interval_seconds: float = 10.0):
     """
-    Periodically rebuilds option chains for all watched symbols and stores them
-    in state.option_chains (shared memory proxy or local dict).
+    Periodically rebuilds option chains for all watched symbols.
+
+    Architecture:
+    - build_get_option_chain() returns raw market structure / prices
+    - this loop stores raw cache only
+    - calculate_greeks_loop() is the only writer of IV/Greeks
     """
-    logger.info(f"🔗 Option chain cache loop started (interval={interval_seconds}s)")
+    logger.info(f"🔗 Option chain cache loop started (interval={interval_seconds}s, with forced rebuild at 09:15 IST)")
+    
+    # --- FIX: Initialize flag based on current time to handle restarts ---
+    # If it's already past 9:15 on startup, consider it "done" for today.
+    now_on_startup = get_ist_now()
+    rebuilt_for_today = (now_on_startup.hour > 9) or (now_on_startup.hour == 9 and now_on_startup.minute > 15)
+    if rebuilt_for_today:
+        logger.info("Application started after 09:15 IST. The forced rebuild for today is marked as complete.")
+
     try:
         while True:
             all_successful = True
+            now_ist = get_ist_now()
+            
+            # Reset flag before market open for the next day's trigger
+            if now_ist.hour < 9 and rebuilt_for_today:
+                logger.info("Resetting 09:15 rebuild flag for the new day.")
+                rebuilt_for_today = False
+
+            # --- FIX: Force a rebuild at 09:15 AM ---
+            if not rebuilt_for_today and now_ist.hour == 9 and now_ist.minute == 15:
+                logger.info("✅ Triggering forced option chain and spot price rebuild at 09:15 IST.")
+                # --- FIX: Also fetch the spot price again ---
+                for symbol in list(SYMBOL_CONFIG.keys()):
+                    try:
+                        logger.info(f"Pre-fetching spot for {symbol} at 09:15...")
+                        await asyncio.get_event_loop().run_in_executor(None, get_ltp, SYMBOL_CONFIG[symbol]['cash_index_token'], SYMBOL_CONFIG[symbol]['cash_index_segment'], True)
+                    except Exception as spot_e:
+                        logger.error(f"Failed to pre-fetch spot for {symbol} at 09:15: {spot_e}")
+                rebuilt_for_today = True
+                await asyncio.sleep(0.1) # Sleep briefly and loop again to rebuild immediately
+                continue # Skip the rest of the loop to force immediate rebuild
+            
+            # --- FIX: Force a spot price refresh at the start of every loop iteration ---
+            # This ensures the spot price is never stale for more than the loop interval.
+            for symbol in list(SYMBOL_CONFIG.keys()):
+                try:
+                    # The get_ltp call with bypass_cache=True updates the central price cache.
+                    await asyncio.get_event_loop().run_in_executor(None, get_ltp, SYMBOL_CONFIG[symbol]['cash_index_token'], SYMBOL_CONFIG[symbol]['cash_index_segment'], True)
+                except Exception as spot_e:
+                    logger.error(f"Failed to refresh spot for {symbol} in main loop: {spot_e}")
+            
             try:
                 symbols_to_update = list(SYMBOL_CONFIG.keys())
+
                 for symbol in symbols_to_update:
                     try:
                         loop = asyncio.get_event_loop()
-                        chain = await loop.run_in_executor(None, build_get_option_chain, symbol)
-                        if chain:
-                            state.option_chains[symbol] = chain
-                            logger.debug(f"   🔄 Chain refreshed for {symbol}")
+                        old_chain = getattr(state, "option_chains", {}).get(symbol)
+
+                        new_chain = await loop.run_in_executor(
+                            None,
+                            build_get_option_chain,
+                            symbol
+                        )
+
+                        if new_chain:
+                            new_chain = _merge_live_market_fields(old_chain, new_chain)
+                            state.option_chains[symbol] = new_chain
+
+                            try:
+                                published = state.publish_option_chain(symbol, new_chain)
+                                logger.info(
+                                    f"[CHAIN PUBLISH] "
+                                    f"Symbol={symbol} "
+                                    f"Seq={published.get('publish_seq')} "
+                                    f"Published={published.get('published_at')} "
+                                    f"Rows={len(published.get('chain', []))}"
+                                )
+                            except Exception:
+                                logger.exception(f"[CHAIN PUBLISH FAILED] {symbol}")
+
+                            try:
+                                published = state.publish_option_chain(symbol, new_chain)
+                                logger.info(
+                                    f"[CHAIN PUBLISH] "
+                                    f"Symbol={symbol} "
+                                    f"Seq={published.get('publish_seq')} "
+                                    f"Published={published.get('published_at')} "
+                                    f"Rows={len(published.get('chain', []))}"
+                                )
+                                atm = published.get("atm")
+                                row = next(
+                                    (r for r in published.get("chain", [])
+                                     if r.get("strike") == atm),
+                                    None,
+                                )
+                                if row:
+                                    logger.info(
+                                        "[CHAIN ATM] "
+                                        f"ATM={atm} "
+                                        f"CE_TS={row.get('ce_quote_ts')} "
+                                        f"PE_TS={row.get('pe_quote_ts')} "
+                                        f"CE={row.get('ce_ltp')} "
+                                        f"PE={row.get('pe_ltp')}"
+                                    )
+                            except Exception:
+                                logger.exception(f"[CHAIN PUBLISH FAILED] {symbol}")
+                            logger.error(f"🔄 Raw chain refreshed for {symbol}")
                         else:
                             all_successful = False
+
                     except Exception as e:
-                        logger.warning(f"   ⚠️ Chain refresh failed for {symbol}: {e}")
+                        logger.warning(f"⚠️ Chain refresh failed for {symbol}: {e}")
                         all_successful = False
+
             except Exception as e:
                 logger.error(f"❌ Option chain cache loop error: {e}", exc_info=True)
                 all_successful = False
 
             sleep_time = interval_seconds if all_successful else 1.0
             await asyncio.sleep(sleep_time)
+
     except asyncio.CancelledError:
         logger.info("🔗 Option chain cache loop stopped")
 
@@ -181,58 +513,63 @@ async def rest_polling_loop(interval_seconds: float = 1.0):
     Fallback price polling via REST when the XTS socket is disconnected.
     Only fires when state.data_source == 'REST_POLL'.
 
-    ✅ FIX: After updating PriceSHM, also queues each tick into
-    state.market_data_queue so process_and_broadcast_market_data_queue
-    picks them up and broadcasts price_update + chain_header_update to
-    the ZMQ PUB socket → UI clients.
+    After updating PriceSHM, queue each tick into state.market_data_queue
+    so process_and_broadcast_market_data_queue can publish price updates.
     """
     logger.info("🔄 REST polling fallback loop started")
     loop = asyncio.get_event_loop()
+
     try:
         while True:
             try:
-                if getattr(state, 'data_source', 'WEBSOCKET') == 'REST_POLL':
-                    subscribed_tokens = list(getattr(state, 'subscribed_tokens', set()))
+                if getattr(state, "data_source", "WEBSOCKET") == "REST_POLL":
+                    subscribed_tokens = list(getattr(state, "subscribed_tokens", set()))
                     if subscribed_tokens:
-                        # ✅ get_bulk_ltp is synchronous — run in executor to avoid blocking
                         prices = await loop.run_in_executor(
-                            None, get_bulk_ltp, subscribed_tokens
+                            None,
+                            get_bulk_ltp,
+                            subscribed_tokens
                         )
+
                         if prices:
                             for token, ltp in prices.items():
                                 token_int = int(token)
                                 ltp_float = float(ltp)
 
-                                # ✅ FIX: Use state.price_shm (correct SHM in marketdata_service)
-                                # NOT state.shared_data (that's the main app's SHM)
-                                if hasattr(state, 'price_shm') and state.price_shm:
+                                if hasattr(state, "price_shm") and state.price_shm:
                                     state.price_shm.update(token_int, ltp_float)
 
-                                # ✅ FIX: Queue tick so broadcast manager publishes it via ZMQ PUB
-                                if hasattr(state, 'market_data_queue') and state.market_data_queue:
+                                if hasattr(state, "market_data_queue") and state.market_data_queue:
                                     try:
                                         state.market_data_queue.put_nowait({
-                                            'ExchangeInstrumentID': token_int,
-                                            'ltp': ltp_float
+                                            "ExchangeInstrumentID": token_int,
+                                            "ltp": ltp_float
                                         })
                                     except asyncio.QueueFull:
-                                        pass  # Queue backed up — REST poll will catch it next cycle
+                                        pass
 
                             logger.debug(f"🔄 REST poll: queued {len(prices)} ticks")
+
             except Exception as e:
                 logger.warning(f"⚠️ REST polling error: {e}")
+
             await asyncio.sleep(interval_seconds)
+
     except asyncio.CancelledError:
         logger.info("🔄 REST polling fallback loop stopped")
 
 
 async def calculate_greeks_loop(interval_seconds: float = 1.0):
     """
-    Periodically recalculates Greeks for all strikes in the cached chains
-    and writes them back into state.option_chains so snapshots and the
-    UI always have fresh Greek values.
+    Recalculates Greeks for all strikes in state.option_chains.
+
+    Source-of-truth rules:
+    - Builder/cache loop writes raw chain only
+    - This loop is the only writer for IV and Greeks
+    - Shared IV is chosen from OTM side, then copied to CE and PE
     """
     logger.info(f"🧮 Greeks calculator loop started (interval={interval_seconds}s)")
+
     try:
         while True:
             try:
@@ -240,80 +577,268 @@ async def calculate_greeks_loop(interval_seconds: float = 1.0):
                     if not isinstance(chain, dict):
                         continue
 
-                    # Update fut_ltp with the latest price from the state cache
-                    fut_token = chain.get('fut_token')
+                    fut_token = chain.get("fut_token")
                     if fut_token:
                         live_fut_price = state.get_price(int(fut_token))
                         if live_fut_price and live_fut_price > 0:
-                            chain['fut_ltp'] = live_fut_price
+                            chain["fut_ltp"] = live_fut_price
 
-                    fut_ltp = chain.get('fut_ltp', 0)
-                    dte     = chain.get('dte', 0)
+                    fut_ltp = float(chain.get("fut_ltp", 0.0) or 0.0)
+                    dte = float(chain.get("dte", 0.0) or 0.0)
+
                     if fut_ltp <= 0 or dte < 0:
                         continue
 
-                    # Calculate Synthetic Future Price
                     synthetic_spot = fut_ltp
+
                     try:
-                        atm_strike = chain.get('atm')
-                        gap = chain.get('gap', 50)
+                        atm_strike = chain.get("atm")
+                        gap = chain.get("gap", 50)
+
                         if atm_strike and gap > 0:
                             atm_row = next(
-                                (r for r in chain.get('chain', []) if r.get('strike') == atm_strike),
+                                (r for r in chain.get("chain", []) if r.get("strike") == atm_strike),
                                 None
                             )
                             if atm_row:
-                                ce_tok = int(atm_row.get('ce_token') or 0)
-                                pe_tok = int(atm_row.get('pe_token') or 0)
+                                ce_tok = int(atm_row.get("ce_token") or 0)
+                                pe_tok = int(atm_row.get("pe_token") or 0)
+
                                 if ce_tok > 0 and pe_tok > 0:
-                                    ce_p = state.get_price(ce_tok) or atm_row.get('ce_ltp', 0)
-                                    pe_p = state.get_price(pe_tok) or atm_row.get('pe_ltp', 0)
+                                    ce_p = state.get_price(ce_tok) or atm_row.get("ce_ltp", 0)
+                                    pe_p = state.get_price(pe_tok) or atm_row.get("pe_ltp", 0)
+
                                     if ce_p > 0 and pe_p > 0:
                                         calculated_synthetic = atm_strike + ce_p - pe_p
+
                                         if abs(calculated_synthetic - atm_strike) <= (gap * 2):
                                             synthetic_spot = calculated_synthetic
                                         else:
                                             logger.debug(
                                                 f"[{symbol}] Synthetic spot {calculated_synthetic:.2f} "
-                                                f"too far from ATM {atm_strike}. Using cash {fut_ltp:.2f}."
+                                                f"too far from ATM {atm_strike}. Using fut_ltp {fut_ltp:.2f}."
                                             )
-                        chain['synthetic_spot'] = synthetic_spot
+
+                        chain["synthetic_spot"] = synthetic_spot
+
                     except Exception as syn_e:
                         logger.warning(f"Error calculating synthetic spot for {symbol}: {syn_e}")
-                        chain['synthetic_spot'] = fut_ltp
+                        chain["synthetic_spot"] = fut_ltp
+                        synthetic_spot = fut_ltp
 
-                    rows = chain.get('chain', [])
+                    rows = chain.get("chain", [])
                     for row in rows:
-                        strike = row.get('strike', 0)
-                        for side, otype, tok_key, iv_key in [
-                            ('ce', 'call', 'ce_token', 'ce_iv'),
-                            ('pe', 'put', 'pe_token', 'pe_iv'),
-                        ]:
-                            tok = row.get(f'{side}_token')
-                            if not tok:
-                                continue
-                            ltp = (
-                                state.get_price(int(tok))
-                                or row.get(f'{side}_ltp', 0)
-                            )
-                            if ltp and ltp > 0:
-                                greeks = calculate_all_greeks(
-                                    otype, strike, synthetic_spot, dte, ltp, 0.0
+                        if not isinstance(row, dict):
+                            continue
+
+                        strike = row.get("strike", 0)
+                        ce_tok = row.get("ce_token")
+                        pe_tok = row.get("pe_token")
+
+                        ce_ltp = (
+                            state.get_price(int(ce_tok)) or row.get("ce_ltp", 0)
+                        ) if ce_tok else 0.0
+
+                        pe_ltp = (
+                            state.get_price(int(pe_tok)) or row.get("pe_ltp", 0)
+                        ) if pe_tok else 0.0
+
+                        row["ce_ltp"] = ce_ltp or row.get("ce_ltp", 0)
+                        row["pe_ltp"] = pe_ltp or row.get("pe_ltp", 0)
+
+                        shared_iv_pct = 0.0
+                        iv_source = "NONE"
+                        raw_iv = 0.0
+
+                        try:
+                            if strike >= synthetic_spot:
+                                if ce_ltp > 0:
+                                    ce_iv_greeks = calculate_all_greeks(
+                                        "call", strike, synthetic_spot, dte, ce_ltp, 0.0
+                                    )
+                                    raw_iv = ce_iv_greeks.get("iv", 0)
+                                    if raw_iv > 0:
+                                        shared_iv_pct = _normalise_iv(raw_iv)
+                                        iv_source = "CE_OTM"
+                            else:
+                                if pe_ltp > 0:
+                                    pe_iv_greeks = calculate_all_greeks(
+                                        "put", strike, synthetic_spot, dte, pe_ltp, 0.0
+                                    )
+                                    raw_iv = pe_iv_greeks.get("iv", 0)
+                                    if raw_iv > 0:
+                                        shared_iv_pct = _normalise_iv(raw_iv)
+                                        iv_source = "PE_OTM"
+                        except Exception as iv_e:
+                            logger.debug(f"[{symbol}] OTM IV calc failed at strike {strike}: {iv_e}")
+
+                        if shared_iv_pct <= 0 and ce_ltp > 0:
+                            try:
+                                ce_iv_greeks = calculate_all_greeks(
+                                    "call", strike, synthetic_spot, dte, ce_ltp, 0.0
                                 )
-                                row[f'{side}_delta'] = greeks.get('delta', 0.0)
-                                row[f'{side}_gamma'] = greeks.get('gamma', 0.0)
-                                row[f'{side}_theta'] = greeks.get('theta', 0.0)
-                                row[f'{side}_vega']  = greeks.get('vega', 0.0)
-                                raw_iv = greeks.get('iv', 0)
+                                raw_iv = ce_iv_greeks.get("iv", 0)
                                 if raw_iv > 0:
-                                    row[iv_key] = _normalise_iv(raw_iv)
-                            row[f'{side}_ltp'] = ltp or row.get(f'{side}_ltp', 0)
+                                    shared_iv_pct = _normalise_iv(raw_iv)
+                                    iv_source = "CE_FALLBACK"
+                            except Exception as iv_e:
+                                logger.debug(f"[{symbol}] CE fallback IV calc failed at strike {strike}: {iv_e}")
+
+                        if shared_iv_pct <= 0 and pe_ltp > 0:
+                            try:
+                                pe_iv_greeks = calculate_all_greeks(
+                                    "put", strike, synthetic_spot, dte, pe_ltp, 0.0
+                                )
+                                raw_iv = pe_iv_greeks.get("iv", 0)
+                                if raw_iv > 0:
+                                    shared_iv_pct = _normalise_iv(raw_iv)
+                                    iv_source = "PE_FALLBACK"
+                            except Exception as iv_e:
+                                logger.debug(f"[{symbol}] PE fallback IV calc failed at strike {strike}: {iv_e}")
+
+                        row["ce_iv"] = shared_iv_pct
+                        row["pe_iv"] = shared_iv_pct
+
+                        logger.info(
+                            f"[IV DEBUG] "
+                            f"Strike={strike} "
+                            f"Source={iv_source} "
+                            f"RawIV={raw_iv} "
+                            f"SharedIV={shared_iv_pct}"
+                        )
+
+                        iv_dec = shared_iv_pct / 100.0 if shared_iv_pct > 0 else 0.0
+
+                        if iv_dec > 0:
+                            try:
+                                ce_greeks = calculate_greeks_from_iv(
+                                    "call", strike, synthetic_spot, dte, iv_dec, 0.0
+                                )
+                                pe_greeks = calculate_greeks_from_iv(
+                                    "put", strike, synthetic_spot, dte, iv_dec, 0.0
+                                )
+
+                                row["ce_delta"] = ce_greeks.get("delta", 0.0)
+                                row["ce_gamma"] = ce_greeks.get("gamma", 0.0)
+                                row["ce_theta"] = ce_greeks.get("theta", 0.0)
+                                row["ce_vega"] = ce_greeks.get("vega", 0.0)
+
+                                row["pe_delta"] = pe_greeks.get("delta", 0.0)
+                                row["pe_gamma"] = pe_greeks.get("gamma", 0.0)
+                                row["pe_theta"] = pe_greeks.get("theta", 0.0)
+                                row["pe_vega"] = pe_greeks.get("vega", 0.0)
+
+                            except Exception as greek_e:
+                                logger.debug(f"[{symbol}] Greek-from-IV calc failed at strike {strike}: {greek_e}")
+                                _zero_row_derived_fields(row)
+                        else:
+                            _zero_row_derived_fields(row)
+
+                # Publish the newly calculated Greeks and IV snapshot immediately
+                try:
+                    published = state.publish_option_chain(symbol, chain)
+
+                    atm = published.get("atm")
+                    atm_row = next(
+                        (r for r in published.get("chain", [])
+                         if r.get("strike") == atm),
+                        None,
+                    )
+                    if atm_row:
+                        logger.info(
+                            "[PUBLISH VERIFY] "
+                            f"ATM={atm} "
+                            f"CE_IV={atm_row.get('ce_iv')} "
+                            f"PE_IV={atm_row.get('pe_iv')} "
+                            f"CE_DELTA={atm_row.get('ce_delta')} "
+                            f"PE_DELTA={atm_row.get('pe_delta')}"
+                        )
+                    logger.info(
+                        f"[GREEKS PUBLISH] "
+                        f"Symbol={symbol} "
+                        f"Seq={published.get('publish_seq')} "
+                        f"ATM={published.get('atm')} "
+                        f"Rows={len(published.get('chain', []))}"
+                    )
+
+                    atm = published.get("atm")
+                    atm_row = next(
+                        (
+                            r
+                            for r in published.get("chain", [])
+                            if r.get("strike") == atm
+                        ),
+                        None,
+                    )
+
+                    if atm_row:
+                        logger.info(
+                            "[GREEKS ATM] "
+                            f"CE_IV={atm_row.get('ce_iv')} "
+                            f"PE_IV={atm_row.get('pe_iv')} "
+                            f"CE_DELTA={atm_row.get('ce_delta')} "
+                            f"PE_DELTA={atm_row.get('pe_delta')} "
+                            f"CE_THETA={atm_row.get('ce_theta')} "
+                            f"PE_THETA={atm_row.get('pe_theta')} "
+                            f"CE_VEGA={atm_row.get('ce_vega')} "
+                            f"PE_VEGA={atm_row.get('pe_vega')}"
+                        )
+
+                    atm = published.get("atm")
+                    atm_row = next(
+                        (
+                            r
+                            for r in published.get("chain", [])
+                            if r.get("strike") == atm
+                        ),
+                        None,
+                    )
+
+                    if atm_row:
+                        logger.info(
+                            "[GREEKS ATM] "
+                            f"CE_IV={atm_row.get('ce_iv')} "
+                            f"PE_IV={atm_row.get('pe_iv')} "
+                            f"CE_DELTA={atm_row.get('ce_delta')} "
+                            f"PE_DELTA={atm_row.get('pe_delta')} "
+                            f"CE_THETA={atm_row.get('ce_theta')} "
+                            f"PE_THETA={atm_row.get('pe_theta')} "
+                            f"CE_VEGA={atm_row.get('ce_vega')} "
+                            f"PE_VEGA={atm_row.get('pe_vega')}"
+                        )
+
+                    atm = published.get("atm")
+                    atm_row = next(
+                        (
+                            r
+                            for r in published.get("chain", [])
+                            if r.get("strike") == atm
+                        ),
+                        None,
+                    )
+
+                    if atm_row:
+                        logger.info(
+                            "[GREEKS ATM] "
+                            f"CE_IV={atm_row.get('ce_iv')} "
+                            f"PE_IV={atm_row.get('pe_iv')} "
+                            f"CE_DELTA={atm_row.get('ce_delta')} "
+                            f"PE_DELTA={atm_row.get('pe_delta')} "
+                            f"CE_THETA={atm_row.get('ce_theta')} "
+                            f"PE_THETA={atm_row.get('pe_theta')} "
+                            f"CE_VEGA={atm_row.get('ce_vega')} "
+                            f"PE_VEGA={atm_row.get('pe_vega')}"
+                        )
+                except Exception as pub_err:
+                    logger.debug(f"[{symbol}] Greeks chain publish failed: {pub_err}")
+
             except Exception as e:
                 logger.error(f"❌ Greeks loop error: {e}", exc_info=True)
+
             await asyncio.sleep(interval_seconds)
+
     except asyncio.CancelledError:
         logger.info("🧮 Greeks calculator loop stopped")
-
 
 async def monitor_xts_socket_status():
     """Broadcasts XTS socket connected/disconnected events to the main app."""
@@ -373,10 +898,10 @@ async def verify_orders_task(order_ids: List[str], batch_name: str = "BATCH") ->
             f"[{batch_name}] Verification Complete: "
             f"{len(verified_success)} OK, {len(verified_failed)} Failed."
         )
-        logger.info("=" * 100)
+        logger.debug("=" * 100)
         logger.info(f"✅ [{batch_name}] VERIFICATION COMPLETE — "
                     f"{len(verified_success)}/{len(order_ids)} verified")
-        logger.info("=" * 100)
+        logger.debug("=" * 100)
         await broadcast_log('SUCCESS' if not verified_failed else 'WARNING', log_msg)
 
         if verified_success or verified_failed:
@@ -1281,10 +1806,29 @@ async def create_snapshot_for_trade(
         logger.warning(f"Cannot snapshot non-existent trade {trade_uid}")
         return
 
+
+        logger.debug(f"[{trade_uid}] Snapshot skipped because status={status}")
+        return
+
+    try:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        from models.state import state
+        orders = await loop.run_in_executor(None, state.db.get_orders_by_trade_id, trade_uid)
+        
+        filled_orders = [
+            o for o in orders 
+            if str(o.get("order_status") or o.get("status") or "").upper() == "FILLED"
+        ]
+        if not filled_orders:
+            logger.debug(f"[{trade_uid}] Snapshot skipped because no FILLED orders exist.")
+            return
+    except Exception as e:
+        logger.debug(f"[{trade_uid}] Safe guard order check failed: {e}")
     symbol = trade.get('symbol', 'NIFTY').upper()
     chain  = (
-        state.get_option_chain(symbol)
-        if hasattr(state, 'get_option_chain') else None
+        state.get_published_option_chain(symbol)
+        if hasattr(state, 'get_published_option_chain') else None
     )
     is_valid = (
         isinstance(chain, dict)
@@ -1338,6 +1882,25 @@ async def _assemble_and_broadcast_snapshot(trade_uid: str):
     if not trade:
         return
 
+
+        logger.debug(f"[{trade_uid}] Snapshot skipped because status={status}")
+        return
+
+    try:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        from models.state import state
+        orders = await loop.run_in_executor(None, state.db.get_orders_by_trade_id, trade_uid)
+        
+        filled_orders = [
+            o for o in orders 
+            if str(o.get("order_status") or o.get("status") or "").upper() == "FILLED"
+        ]
+        if not filled_orders:
+            logger.debug(f"[{trade_uid}] Snapshot skipped because no FILLED orders exist.")
+            return
+    except Exception as e:
+        logger.debug(f"[{trade_uid}] Safe guard order check failed: {e}")
     manager        = get_trade_manager(trade_uid) if callable(get_trade_manager) else None
     event_bus_inst = get_event_bus() if callable(get_event_bus) else None
 
@@ -1420,8 +1983,8 @@ async def _assemble_and_broadcast_snapshot(trade_uid: str):
 async def create_trade_snapshots_loop(interval_seconds: float = 0.5):
     """
     Every interval_seconds:
-      1. Drain snapshot_q from each live worker process
-      2. For active trades WITHOUT a worker process → create snapshot directly
+      1. Reconcile live worker process registry
+      2. For active trades WITHOUT a worker process -> create snapshot directly
       3. Push lightweight row-data to Snapshot Service (port 8003) or WS fallback
       4. Broadcast full straddle_update (detail panel) for each trade
     """
@@ -1432,48 +1995,62 @@ async def create_trade_snapshots_loop(interval_seconds: float = 0.5):
         state.trade_snapshots = {}
 
     snapshot_service_url = (
-        f"http://localhost:"
+        f"http://127.0.0.1:"
         f"{getattr(_config, 'SNAPSHOT_SERVICE_PORT', 8003)}"
         f"/api/push-snapshots"
     )
 
     while True:
         try:
-            # ── Step 1: Drain worker process queues ───────────────────────────
+            # ── Step 1: Reconcile worker processes ───────────────────────────
             trade_processes = getattr(state, 'trade_processes', {})
+            local_process_refs = getattr(state, 'local_process_refs', {})
+
             for trade_uid in list(trade_processes.keys()):
                 pinfo = trade_processes.get(trade_uid)
-                if not pinfo or not pinfo['process'].is_alive():
+                process = local_process_refs.get(trade_uid)
+
+                if not pinfo or not process or not process.is_alive():
                     logger.warning(f"Worker process for {trade_uid} is dead. Removing.")
                     trade_processes.pop(trade_uid, None)
+                    local_process_refs.pop(trade_uid, None)
+                    getattr(state, 'local_command_queues', {}).pop(trade_uid, None)
                     continue
-                q      = pinfo.get('snapshot_q')
-                if not q:
-                    continue
-                latest = None
-                try:
-                    while not q.empty():
-                        latest = q.get_nowait()
-                except Exception:
-                    pass
-                if latest is not None:
-                    if not hasattr(state, 'trade_snapshots'):
-                        state.trade_snapshots = {}
-                    state.trade_snapshots[trade_uid] = latest
 
-            # ── Step 2: Direct snapshot for trades with no worker process ─────
+            # ── Step 2: Direct snapshot for trades with no worker process ────
             if state.db:
-                all_active  = state.db.get_active_straddles() or []
+                all_active = state.db.get_active_straddles() or []
                 worker_uids = set(trade_processes.keys())
+
                 for trade in all_active:
-                    tid = trade.get('trade_uid')
+                    status = str(trade.get("status") or "").upper()
+
+                    if status not in {
+                        "FILLED",
+                        "ACTIVE",
+                        "BUILDING",
+                        "PARTIAL",
+                        "PARTIAL-SQF",
+                        "HEDGING",
+                        "ROLLING",
+                        "SQUARING-OFF",
+                    }:
+                        continue
+
+                    tid = trade.get("trade_uid")
+
                     if tid and tid not in worker_uids:
                         try:
-                            await create_snapshot_for_trade(tid, log_level='DEBUG')
+                            await create_snapshot_for_trade(
+                                tid,
+                                log_level="DEBUG",
+                            )
                         except Exception as e:
-                            logger.error(f"Direct snapshot error for {tid}: {e}")
+                            logger.error(
+                                f"Direct snapshot error for {tid}: {e}"
+                            )
 
-            # ── Step 3 + 4: Build updates and broadcast ───────────────────────
+    # ── Step 3 + 4: Build updates and broadcast ──────────────────────
             snapshots = getattr(state, 'trade_snapshots', {})
             if not snapshots:
                 await asyncio.sleep(interval_seconds)
@@ -1483,22 +2060,22 @@ async def create_trade_snapshots_loop(interval_seconds: float = 0.5):
             for trade_uid, snap in list(snapshots.items()):
                 pa = snap.get('points_allowed')
                 lightweight_updates.append({
-                    'trade_uid':          trade_uid,
-                    'live_pnl':           snap.get('total_pnl'),
-                    'unrealized_pnl':     snap.get('unrealized_pnl'),
-                    'realized_pnl':       snap.get('realized_pnl', 0.0),
-                    'live_net_delta':     snap.get('net_delta'),
-                    'net_gamma':          snap.get('net_gamma'),
-                    'net_theta':          snap.get('net_theta'),
-                    'net_vega':           snap.get('net_vega'),
-                    'avg_iv':             snap.get('avg_iv'),
-                    'pts_out':            snap.get('pts_out'),
-                    'points_allowed':     None if pa == float('inf') else pa,
+                    'trade_uid': trade_uid,
+                    'live_pnl': snap.get('total_pnl'),
+                    'unrealized_pnl': snap.get('unrealized_pnl'),
+                    'realized_pnl': snap.get('realized_pnl', 0.0),
+                    'live_net_delta': snap.get('net_delta'),
+                    'net_gamma': snap.get('net_gamma'),
+                    'net_theta': snap.get('net_theta'),
+                    'net_vega': snap.get('net_vega'),
+                    'avg_iv': snap.get('avg_iv'),
+                    'pts_out': snap.get('pts_out'),
+                    'points_allowed': None if pa == float('inf') else pa,
                     'roll_trigger_price': snap.get('roll_trigger_price'),
-                    'sl_threshold':       snap.get('sl_threshold'),
-                    'synthetic_spot':     snap.get('synthetic_spot'),
-                    'spot_price':         snap.get('spot_price'),
-                    'pnl_per_straddle':   snap.get('pnl_per_straddle'),
+                    'sl_threshold': snap.get('sl_threshold'),
+                    'synthetic_spot': snap.get('synthetic_spot'),
+                    'spot_price': snap.get('spot_price'),
+                    'pnl_per_straddle': snap.get('pnl_per_straddle'),
                     'position_ltps': {
                         str(p['token']): p['ltp']
                         for p in snap.get('live_positions', [])
@@ -1527,40 +2104,47 @@ async def create_trade_snapshots_loop(interval_seconds: float = 0.5):
                     pass
 
                 if not pushed:
-                    asyncio.create_task(broadcast_message({
-                        'type': 'chain_header_update',
-                        'symbol': symbol,
-                        'spot':    round(futltp, 2),
-                        'syn_fut': round(chain.get('syntheticspot', futltp), 2),
-                        'atm':     int(round(chain.get('syntheticspot', futltp) / chain.get('gap', 50)) * chain.get('gap', 50)),
-                    }))
-
-                for upd in lightweight_updates:
-                    tid  = upd['trade_uid']
-                    snap = snapshots.get(tid, {})
-                    pa   = snap.get('points_allowed')
-                    asyncio.create_task(broadcast_message({
-                        'type': 'straddle_update',
-                        'data': {
-                            'trade_uid':          tid,
-                            'live_pnl':           snap.get('total_pnl'),
-                            'unrealized_pnl':     snap.get('unrealized_pnl'),
-                            'realized_pnl':       snap.get('realized_pnl', 0.0),
-                            'live_net_delta':     snap.get('net_delta'),
-                            'net_gamma':          snap.get('net_gamma'),
-                            'net_theta':          snap.get('net_theta'),
-                            'net_vega':           snap.get('net_vega'),
-                            'avg_iv':             snap.get('avg_iv'),
-                            'pts_out':            snap.get('pts_out'),
-                            'points_allowed':     None if pa == float('inf') else pa,
-                            'roll_trigger_price': snap.get('roll_trigger_price'),
-                            'sl_threshold':       snap.get('sl_threshold'),
-                            'synthetic_spot':     snap.get('synthetic_spot'),
-                            'spot_price':         snap.get('spot_price'),
-                            'pnl_per_straddle':   snap.get('pnl_per_straddle'),
-                            'live_positions':     snap.get('live_positions', []),
-                        }
-                    }))
+                    for upd in lightweight_updates:
+                        tid = upd['trade_uid']
+                        snap = snapshots.get(tid, {})
+                        pa = snap.get('points_allowed')
+                        asyncio.create_task(broadcast_message({
+                            'type': 'straddle_update',
+                            'data': {
+                                'trade_uid': tid,
+                                'live_pnl': snap.get('total_pnl'),
+                                'unrealized_pnl': snap.get('unrealized_pnl'),
+                                'realized_pnl': snap.get('realized_pnl', 0.0),
+                                'live_net_delta': snap.get('net_delta'),
+                                'net_gamma': snap.get('net_gamma'),
+                                'net_theta': snap.get('net_theta'),
+                                'net_vega': snap.get('net_vega'),
+                                'avg_iv': snap.get('avg_iv'),
+                                'pts_out': snap.get('pts_out'),
+                                'points_allowed': None if pa == float('inf') else pa,
+                                'roll_trigger_price': snap.get('roll_trigger_price'),
+                                'sl_threshold': snap.get('sl_threshold'),
+                                'synthetic_spot': snap.get('synthetic_spot'),
+                                'spot_price': snap.get('spot_price'),
+                                'pnl_per_straddle': snap.get('pnl_per_straddle'),
+                                'live_positions': snap.get('live_positions', []),
+                                'score': snap.get('score'),
+                                'score_available': snap.get('score_available'),
+                                'score_passed': snap.get('score_passed'),
+                                'live_iv': snap.get('live_iv'),
+                                'live_straddle': snap.get('live_straddle'),
+                                'reference_spot': snap.get('reference_spot'),
+                                'synthetic_spot': snap.get('synthetic_spot'),
+                                'spot_source': snap.get('spot_source'),
+                                'historical_idv': snap.get('historical_idv'),
+                                'prev_day_straddle': snap.get('prev_day_straddle'),
+                                'iv_idv_ratio': snap.get('iv_idv_ratio'),
+                                'straddle_ratio': snap.get('straddle_ratio'),
+                                'iv_idv_score': snap.get('iv_idv_score'),
+                                'straddle_score': snap.get('straddle_score'),
+                                'build_iv_score': snap.get('build_iv_score'),                                
+                            }
+                        }))
 
             await asyncio.sleep(interval_seconds)
 

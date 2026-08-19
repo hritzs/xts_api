@@ -43,7 +43,7 @@ expiryDate_nse_fo = datetime.strptime((xt_m.get_expiry_date(exchangeSegment=exch
 fut_token_nse_fo = (xt_m.get_future_symbol(exchangeSegment = exchangeSegment_nse_fo,series = "FUTIDX",symbol = symbol,expiryDate = expiryDate_nse_fo)).get('result', [])
 exchange_instrument_id_nse_fo = (fut_token_nse_fo[0].get('ExchangeInstrumentID')if fut_token_nse_fo else None)
 
-
+exchange_instrument_id_nse_fo = 58072
 ORDER_DICT = []
 
 response = xt.place_order(
@@ -80,7 +80,7 @@ expiryDate_bse_fo = datetime.strptime((xt_m.get_expiry_date(exchangeSegment=exch
 
 fut_token_bse_fo = (xt_m.get_future_symbol(exchangeSegment = exchangeSegment_bse_fo,series = "IF",symbol = symbol,expiryDate = expiryDate_bse_fo)).get('result', [])
 exchange_instrument_id_bse_fo = (fut_token_bse_fo[0].get('ExchangeInstrumentID')if fut_token_bse_fo else None)
-
+exchange_instrument_id_bse_fo = 1144507
 response = xt.place_order(
     exchangeSegment="BSEFO",
     exchangeInstrumentID=exchange_instrument_id_bse_fo,

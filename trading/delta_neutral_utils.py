@@ -105,9 +105,9 @@ def calculate_delta_neutral_quantities(
         # ======================================================================
         # STEP 1: LOG INPUTS AND VALIDATE
         # ======================================================================
-        logger.info("=" * 80)
+        logger.debug("=" * 80)
         logger.info("🔢 DELTA-NEUTRAL QUANTITY CALCULATION")
-        logger.info("=" * 80)
+        logger.debug("=" * 80)
         
         # Validation
         if target_contracts <= 0:
@@ -176,8 +176,14 @@ def calculate_delta_neutral_quantities(
         ce_contracts = mround(theoretical_ce_contracts, lotsize)
         
         # Convert to lots
-        pe_lots = max(1, int(pe_contracts / lotsize))
-        ce_lots = max(1, int(ce_contracts / lotsize))
+        # --- FIX: For small quantities, rounding can result in both legs getting lots.
+        # This logic ensures that for small inputs, one leg can be zero if needed.
+        if target_contracts < lotsize:
+            pe_lots = int(pe_contracts / lotsize) if lotsize > 0 else 0
+            ce_lots = int(ce_contracts / lotsize) if lotsize > 0 else 0
+        else:
+            pe_lots = max(1, int(pe_contracts / lotsize)) if lotsize > 0 else 0
+            ce_lots = max(1, int(ce_contracts / lotsize)) if lotsize > 0 else 0
         
         # Recompute contracts from lots (ensures strict multiples)
         pe_contracts = pe_lots * lotsize
@@ -222,7 +228,7 @@ def calculate_delta_neutral_quantities(
             logger.info(f"⚠️ DELTA IMBALANCE: |{net_delta:.2f}| >= {delta_neutral_threshold:.2f}")
             logger.info(f"   May require hedging or adjustment")
         
-        logger.info("=" * 80)
+        logger.debug("=" * 80)
         
         # ======================================================================
         # STEP 8: RETURN RESULTS

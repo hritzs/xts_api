@@ -1,0 +1,1418 @@
+"""
+API Routes - UPDATED with score preview route, manual fallback values, and DTE score handling
+"""
+
+import asyncio
+import os
+import re
+import math
+import multiprocessing
+import platform
+from pathlib import Path
+from collections import defaultdict
+from datetime import datetime, date,timezone
+from typing import Optional, Dict, Any, Tuple
+import json
+import zmq
+import zmq.asyncio
+import httpx
+import pandas as pd
+from fastapi import APIRouter, HTTPException
+from fastapi import HTTPException, Query
+from fastapi.responses import JSONResponse
+import config
+from utils.logger import logger
+from utils.helpers import get_ist_now
+from market_data import get_option_chain
+from trading.data_client import get_snapshot_from_service
+from trading.builder import build_straddle, manual_sync_trade_orders
+from trading.build_result_utils import get_trade_uid_from_build_result, is_pending_entry_result
+
+from models.schemas import (
+    StraddleRequest,
+    CustomStraddleRequest,
+    ConfigBuildRequest,
+    ConfigScorePreviewRequest,
+    HedgeRequest,
+    SquareOffRequest,
+    PartialSquareOffRequest,
+    UpdateTradeConfigRequest,
+    RollRequest,
+    HealthResponse,
+    APIResponse,
+    StraddleResponse,
+    ConfigBuildResponse,
+    ConfigScorePreviewResponse,
+    OrderBookResponse,
+    PositionsResponse,
+    StraddlesResponse,
+    PnLResponse,
+    OptionChainResponse,
+    PricesResponse,
+    WebSocketMessage,
+    PriceUpdate,
+    PnLUpdate,
+    ErrorResponse,
+)
+
+
+from models.state import state
+from trading.event_bus import (
+    get_event_bus,
+    EventPriority,
+)
+from background.tasks import (
+    broadcast_message,
+    get_live_pnl_data,
+)
+from trading.trade_manager import get_trade_manager
+
+from trading.config_builder import (
+    ALLOWED_CHAIN_SYMBOLS,
+    GAMMA_DATA_FILE,
+    LUT_0916,
+    LUT_0917,
+    LUT_0918,
+    LUT_0919,
+    LUT_0920,
+    _resolve_data_file_path,
+    _compute_score_payload,
+    build_with_config,
+)
+
+
+import inspect
+
+
+
+async def _get_chain_for_scoring(symbol: str):
+    """
+    Returns the latest option chain.
+
+    1. Try the published chain.
+    2. If unavailable, request MarketData over ZMQ.
+    """
+
+    symbol = symbol.upper().strip()
+
+    published = None
+
+    if hasattr(state, "get_published_option_chain"):
+        published = state.get_published_option_chain(symbol)
+
+    if not published and hasattr(state, "published_option_chains"):
+        published = state.published_option_chains.get(symbol)
+
+    logger.info(
+        "[ROUTES CHAIN DEBUG] symbol=%s result=%s type=%s keys=%s",
+        symbol,
+        published is not None,
+        type(published).__name__ if published is not None else None,
+        list(published.keys()) if isinstance(published, dict) else None,
+    )
+
+    if published:
+        logger.info(
+            "Using published option chain for %s",
+            symbol,
+        )
+        return published
+
+    logger.warning(
+        "Published chain unavailable for %s. Requesting MarketData.",
+        symbol,
+    )
+
+    req = None
+
+    try:
+        ctx = zmq.asyncio.Context.instance()
+
+        req = ctx.socket(zmq.REQ)
+
+        req.setsockopt(zmq.LINGER, 0)
+        req.setsockopt(zmq.RCVTIMEO, 3000)
+        req.setsockopt(zmq.SNDTIMEO, 3000)
+
+        req.connect(
+            f"tcp://127.0.0.1:{getattr(config,'ZMQ_MARKETDATA_REQ_PORT',5560)}"
+        )
+
+        await req.send_json({
+            "command": "get_option_chain",
+            "payload": {
+                "symbol": symbol,
+                "strike_range": 15,
+            }
+        })
+
+        reply = await req.recv_json()
+
+        if not reply.get("success"):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Unable to fetch option chain for {symbol}"
+            )
+
+        chain = reply.get("data")
+
+        if not chain:
+            raise HTTPException(
+                status_code=503,
+                detail=f"No option chain returned for {symbol}"
+            )
+
+        return chain
+
+    except HTTPException:
+        raise
+
+    except Exception:
+        logger.exception("Failed getting option chain for %s", symbol)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Option chain unavailable for {symbol}"
+        )
+
+    finally:
+        if req is not None:
+            try:
+                req.close()
+            except Exception:
+                pass
+
+
+async def _compute_config_score(
+    symbol: str,
+    manual_latest_idv=None,          # currently unused
+    manual_historical_idv=None,
+    manual_prev_day_straddle=None,
+    tp_points=None,
+    tp_bps=None,
+    manual_spot_price=None,
+    straddle_price_drop_trigger=None,
+    exit_at_straddle=None,
+    straddle_price_drop_pct_sqf=None,
+    use_live_spot_for_og: bool=False,
+):
+
+    chain_data = await _get_chain_for_scoring(symbol)
+
+    if not chain_data:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No option chain available for {symbol}",
+        )
+
+    logger.debug("=" * 120)
+    logger.debug("[PREVIEW CHAIN DATA]")
+
+    logger.debug(f"Keys : {list(chain_data.keys())}")
+    logger.debug(f"ATM  : {chain_data.get('atm')}")
+    logger.debug(f"Rows : {len(chain_data.get('chain', []))}")
+
+    logger.debug("=" * 120)
+
+    if "chain" not in chain_data:
+        raise HTTPException(
+            status_code=503,
+            detail="Invalid option chain payload.",
+        )
+
+    atm_row = next(
+        (
+            r for r in chain_data.get("chain", [])
+            if r.get("is_atm")
+        ),
+        None,
+    )
+
+    if atm_row is None:
+        atm = chain_data.get("atm")
+        atm_row = next(
+            (
+                r for r in chain_data.get("chain", [])
+                if r.get("strike") == atm
+            ),
+            None,
+        )
+
+    if atm_row is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ATM row not found."
+        )
+
+    ce_iv = float(atm_row.get("ce_iv") or 0.0)
+    pe_iv = float(atm_row.get("pe_iv") or 0.0)
+
+    live_iv = (
+        (ce_iv + pe_iv) / 2.0
+        if (ce_iv > 0 or pe_iv > 0)
+        else 0.0
+    )
+
+    live_straddle = (
+        float(atm_row.get("ce_ltp") or 0.0)
+        + float(atm_row.get("pe_ltp") or 0.0)
+    )
+
+    logger.debug("=" * 120)
+    logger.debug("[PREVIEW IV DEBUG]")
+    logger.debug(f"ATM Strike      : {atm_row.get('strike')}")
+    logger.debug(f"CE IV           : {ce_iv}")
+    logger.debug(f"PE IV           : {pe_iv}")
+    logger.debug(f"Computed LiveIV : {live_iv}")
+    logger.debug(f"CE LTP          : {atm_row.get('ce_ltp')}")
+    logger.debug(f"PE LTP          : {atm_row.get('pe_ltp')}")
+
+    logger.debug("=" * 120)
+    logger.debug("[FULL PREVIEW ATM ROW]")
+
+    for k, v in atm_row.items():
+        logger.debug(f"{k:<35} = {v}")
+
+    logger.debug("=" * 120)
+
+    logger.debug("=" * 120)
+
+
+    return _compute_score_payload(
+        symbol=symbol,
+        live_iv=live_iv,
+        live_straddle=live_straddle,
+        chain_data=chain_data,
+        manual_historical_idv=manual_historical_idv,
+        manual_prev_day_straddle=manual_prev_day_straddle,
+        tp_points=tp_points,
+        tp_bps=tp_bps,
+        manual_spot_price=manual_spot_price,
+        straddle_price_drop_trigger=straddle_price_drop_trigger,
+        exit_at_straddle=exit_at_straddle,
+        straddle_price_drop_pct_sqf=straddle_price_drop_pct_sqf,
+        use_live_spot_for_og=use_live_spot_for_og,
+    )
+router = APIRouter()
+@router.get("/health")
+async def health():
+
+    event_bus = get_event_bus()
+
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "db_status": "connected" if state.db else "disconnected",
+        "db_connected": state.db is not None,
+        "socket_connected": state.socket_connected,
+        "event_bus": "active" if event_bus else "inactive",
+        "cached_prices": len(state.prices) if state.prices is not None else 0,
+        "subscribed_tokens": len(state.subscribed_tokens),
+        "active_straddles": len(state.db.get_active_straddles()) if state.db else 0,
+        "resolved_paths": {
+            "gamma_data_file": _resolve_data_file_path(GAMMA_DATA_FILE),
+            "lut_0916": _resolve_data_file_path(LUT_0916),
+            "lut_0917": _resolve_data_file_path(LUT_0917),
+            "lut_0918": _resolve_data_file_path(LUT_0918),
+            "lut_0919": _resolve_data_file_path(LUT_0919),
+            "lut_0920": _resolve_data_file_path(LUT_0920),
+        },
+    }
+
+
+
+@router.get("/option-chain/{symbol}")
+async def api_get_option_chain(symbol: str, strike_range: int = Query(15, ge=1, le=50)):
+    """Get freshest option chain from the single published source of truth.
+
+    Flow:
+    1. Normalize and validate symbol.
+    2. Return published chain immediately if available.
+    3. If unavailable, trigger a one-shot marketdata build over ZMQ.
+    4. Return the ZMQ chain only as a fallback bootstrap response.
+    """
+
+    def _iso_ms(dt):
+        if dt is None:
+            return None
+        if isinstance(dt, str):
+            return dt
+        if getattr(dt, "tzinfo", None) is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat(timespec="milliseconds")
+
+    symbol = (symbol or "").strip().upper()
+
+    if symbol not in ALLOWED_CHAIN_SYMBOLS:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": f"Unsupported option-chain symbol: {symbol}. Allowed: {sorted(ALLOWED_CHAIN_SYMBOLS)}"
+            }
+        )
+
+    req = None
+
+    try:
+        # 1) Prefer the single source of truth already published in app state.
+        published_chain = state.get_published_option_chain(symbol)
+
+        if published_chain:
+            logger.info(
+                "API: Returning published option chain for %s (published_at=%s)",
+                symbol,
+                published_chain.get("published_at")
+            )
+            return {
+                "success": True,
+                "data": published_chain
+            }
+
+        logger.warning("API: No published chain for %s. Triggering marketdata build.", symbol)
+
+        # 2) Fallback bootstrap via ZMQ request to marketdata service.
+        ctx = zmq.asyncio.Context.instance()
+        req = ctx.socket(zmq.REQ)
+        req.setsockopt(zmq.LINGER, 0)
+        req.setsockopt(zmq.RCVTIMEO, 3000)
+        req.setsockopt(zmq.SNDTIMEO, 3000)
+
+        req.connect(f"tcp://127.0.0.1:{getattr(config, 'ZMQ_MARKETDATA_REQ_PORT', 5560)}")
+
+        await req.send_json({
+            "command": "get_option_chain",
+            "payload": {
+                "symbol": symbol,
+                "strike_range": strike_range
+            }
+        })
+
+        reply = await req.recv_json()
+
+        logger.info(
+            "[API-ZMQ-RAW] %s => %s",
+            symbol,
+            json.dumps(reply, default=str)[:4000]
+        )
+
+        if reply.get("success") and reply.get("data"):
+            zmq_chain = reply["data"]
+
+            if isinstance(zmq_chain, dict):
+                if not zmq_chain.get("symbol"):
+                    zmq_chain["symbol"] = symbol
+
+                if zmq_chain.get("published_at") is not None:
+                    zmq_chain["published_at"] = _iso_ms(zmq_chain.get("published_at"))
+
+            logger.info(
+                "API: Returning ZMQ fallback option chain for %s (published_at=%s)",
+                symbol,
+                zmq_chain.get("published_at") if isinstance(zmq_chain, dict) else None
+            )
+
+            return {
+                "success": True,
+                "data": zmq_chain
+            }
+
+        logger.warning("API: Marketdata returned no usable chain for %s", symbol)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "error": f"Option chain for {symbol} unavailable from marketdata service."
+            }
+        )
+
+    except zmq.error.Again as zmq_timeout:
+        logger.warning("⚠️ ZMQ option-chain timeout for %s: %s", symbol, zmq_timeout)
+        return JSONResponse(
+            status_code=504,
+            content={
+                "success": False,
+                "error": f"Timed out fetching option chain for {symbol} from marketdata service."
+            }
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"Option chain API error for {symbol}: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": str(e)
+            }
+        )
+
+    finally: #
+        if req is not None:
+            try:
+                req.close()
+            except Exception:
+                pass
+    
+@router.post("/straddle/sell")
+async def api_sell_straddle(request: StraddleRequest):
+    """Sell straddle - simple manual entry"""
+    try:
+        now = datetime.now()
+
+        logger.info(f"📥 API: Manual straddle sell request for {request.symbol}")
+
+        default_config = {
+            "symbol": request.symbol,
+            "size": request.lots,
+            "entry_time": None,
+            "exit_time": None,
+            "sl_bps": 14,
+            "hedge_div": 57,
+            "straddle_div": 4,
+            "roll_straddle_div": 0.001,
+            "hedge_monitor_interval": request.hedge_monitor_interval,
+            "sl_monitor_interval": request.sl_monitor_interval,
+            "roll_monitor_interval": request.roll_monitor_interval,
+            "roll_flag_check_interval": 60.0,
+            "hedge_frac": 1.0,
+            "straddle_price_drop_trigger": 0.0,
+            "straddle_price_monitor_interval": 10.0,
+            "hedge_start_time": None,
+            "sl_start_time": None,
+            "roll_start_time": None,
+            "order_lots_per_call": request.order_lots_per_call,
+        }
+        if "SENSEX" in request.symbol.upper():
+            default_config["buy_buffer"] = 6
+            default_config["sell_buffer"] = 6
+        else:
+            default_config["buy_buffer"] = 2
+            default_config["sell_buffer"] = 2
+
+        logger.debug("=" * 100)
+        logger.info(f"REQUEST TYPE : {type(request)}")
+        logger.info(f"REQUEST MODEL FIELDS : {list(request.model_fields.keys()) if hasattr(request, "model_fields") else list(request.__class__.model_fields.keys())}")
+        logger.debug("=" * 100)
+
+        # --- FIX: Correctly pass entry and exit straddle values to the builder config ---
+        default_config["entry_at_straddle"] = request.entry_at_straddle
+        default_config["exit_at_straddle"] = request.exit_at_straddle
+
+        build_result = await build_straddle(
+            symbol=request.symbol,
+            lut_based_selling=request.lut_based_selling,
+            lots=request.lots,
+            trade_uid=None,
+            delta_neutral=request.delta_neutral,
+            trade_config=default_config,
+        )
+
+        if is_pending_entry_result(build_result):
+            trade_uid = get_trade_uid_from_build_result(build_result)
+            logger.info(f"✅ Trade {trade_uid} is PENDING_ENTRY. Worker process will handle monitoring.")
+            return {
+                "success": True,
+                "trade_uid": trade_uid,
+                "status": "WAITING_ENTRY",
+                "current": build_result.get("current_straddle"),
+                "target": build_result.get("target_straddle"),
+                "message": f"Trade {trade_uid} is pending entry.",
+                "timestamp": now.isoformat(),
+            }
+
+        if build_result and build_result.get("success"):
+            trade_uid = get_trade_uid_from_build_result(build_result)
+            if not trade_uid:
+                raise HTTPException(status_code=500, detail="Build succeeded but did not return a trade_uid")
+
+            logger.info(f"✅ Build process for manual trade {trade_uid} initiated successfully. Worker process will handle monitoring.")
+
+            await broadcast_message({
+                "type": "straddle_placed",
+                "trade_uid": trade_uid,
+                "data": build_result,
+                "timestamp": now.isoformat(),
+            })
+
+            return {
+                "success": True,
+                "trade_uid": trade_uid,
+                "data": build_result,
+                "message": f"Straddle placed: {trade_uid}",
+                "timestamp": now.isoformat(),
+            }
+
+        error_message = (build_result or {}).get("error", "Order placement failed")
+        raise HTTPException(status_code=400, detail=error_message)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ API error in /straddle/sell: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/straddle/custom-sell")
+async def api_sell_custom_straddle(request: CustomStraddleRequest):
+    """Sell straddle or strangle with custom CE and PE strike prices."""
+    try:
+        now = datetime.now()
+
+        logger.info(
+            f"📥 API: Custom straddle/strangle sell request for {request.symbol} "
+            f"(CE: {request.ce_strike_price}, PE: {request.pe_strike_price})"
+        )
+
+        default_config = {
+            "symbol": request.symbol,
+            "size": request.lots,
+            "entry_time": None,
+            "exit_time": None,
+            "sl_bps": 14,
+            "hedge_div": 57,
+            "straddle_div": 4,
+            "roll_straddle_div": 0.001,
+            "hedge_monitor_interval": request.hedge_monitor_interval,
+            "sl_monitor_interval": request.sl_monitor_interval,
+            "roll_monitor_interval": request.roll_monitor_interval,
+            "roll_flag_check_interval": 60.0,
+            "hedge_frac": 1.0,
+            "straddle_price_drop_trigger": 0.0,
+            "straddle_price_monitor_interval": 10.0,
+            "hedge_start_time": None,
+            "sl_start_time": None,
+            "roll_start_time": None,
+            "order_lots_per_call": request.order_lots_per_call,
+        }
+        if "SENSEX" in request.symbol.upper():
+            default_config["buy_buffer"] = 6
+            default_config["sell_buffer"] = 6
+        else:
+            default_config["buy_buffer"] = 2
+            default_config["sell_buffer"] = 2
+
+        default_config["entry_at_straddle"] = request.entry_at_straddle
+        default_config["exit_at_straddle"] = request.exit_at_straddle
+
+        build_result = await build_straddle(
+            symbol=request.symbol,
+            lots=request.lots,
+            trade_uid=None,
+            delta_neutral=request.delta_neutral,
+            product_type=request.product_type,
+            trade_config=default_config,
+            ce_strike_price=request.ce_strike_price,
+            pe_strike_price=request.pe_strike_price,
+        )
+
+        if is_pending_entry_result(build_result):
+            trade_uid = get_trade_uid_from_build_result(build_result)
+            logger.info(f"✅ Custom trade {trade_uid} is PENDING_ENTRY. Worker process will handle monitoring.")
+            return {
+                "success": True,
+                "trade_uid": trade_uid,
+                "status": "WAITING_ENTRY",
+                "current": build_result.get("current_straddle"),
+                "target": build_result.get("target_straddle"),
+                "message": f"Trade {trade_uid} is pending entry.",
+                "timestamp": now.isoformat(),
+            }
+
+        if build_result and build_result.get("success"):
+            trade_uid = get_trade_uid_from_build_result(build_result)
+            if not trade_uid:
+                raise HTTPException(status_code=500, detail="Build succeeded but did not return a trade_uid")
+
+            logger.info(f"✅ Build process for custom trade {trade_uid} initiated successfully. Worker process will handle monitoring.")
+
+            await broadcast_message({
+                "type": "straddle_placed",
+                "trade_uid": trade_uid,
+                "data": build_result,
+                "timestamp": now.isoformat(),
+            })
+
+            return {
+                "success": True,
+                "trade_uid": trade_uid,
+                "data": build_result,
+                "message": f"Custom straddle/strangle placed: {trade_uid}",
+                "timestamp": now.isoformat(),
+            }
+
+        error_message = (build_result or {}).get("error", "Order placement failed")
+        raise HTTPException(status_code=400, detail=error_message)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ API error in /straddle/custom-sell: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/straddle/config-score-preview")
+async def api_config_score_preview(request: ConfigScorePreviewRequest):
+    """
+    Preview configuration score without creating a trade.
+    """
+
+    try:
+        score = await _compute_config_score(
+            symbol=request.symbol,
+            manual_latest_idv=request.manual_latest_idv,
+            manual_historical_idv=request.manual_historical_idv,
+            manual_prev_day_straddle=request.manual_prev_day_straddle,
+            tp_points=request.tp_points,
+            tp_bps=request.tp_bps,
+            manual_spot_price=request.manual_spot_price,
+            straddle_price_drop_trigger=request.straddle_price_drop_trigger,
+            exit_at_straddle=request.exit_at_straddle,
+            straddle_price_drop_pct_sqf=request.straddle_price_drop_pct_sqf,
+            use_live_spot_for_og=request.use_live_spot_for_og,
+        )
+
+        return score
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.exception("Config score preview failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to compute configuration score: {e}",
+        )
+
+
+@router.post("/straddle/config-build")
+async def api_config_build(request: ConfigBuildRequest):
+    """
+    Configuration-based automated build
+
+    Features:
+    - Score-based entry rule
+    - Time-based entry/exit
+    - Automated monitoring (SL, Hedge, Roll, Square-off)
+    - Event-driven execution
+    """
+    try:
+        config_data = request.dict()
+        logger.debug("=" * 100)
+        logger.info("📥 API: Config-based build request")
+        logger.info(f"   Payload: {config_data}")
+        logger.debug("=" * 100)
+
+        # Directly schedule the build_with_config task without creating a PENDING record here.
+        # The build_with_config function will handle the entire lifecycle.
+        asyncio.create_task(build_with_config(config_data))
+
+        return {
+            "success": True,
+            "message": f"Automated build for {request.symbol} @ {request.entry_time} has been scheduled.",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Config build API error: {e}", exc_info=True)
+        import traceback
+        logger.error(traceback.format_exc())
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
+@router.get("/orders")
+async def api_get_orders():
+    """Get orders"""
+    try:
+        orders = state.db.get_todays_orders()
+        for order in orders:
+            dt_str = order.get("last_update_datetime") or order.get("order_generated_datetime")
+            if dt_str:
+                dt = None
+                try:
+                    dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    formats_to_try = [
+                        "%d-%m-%Y %H:%M:%S",
+                        "%d-%b-%Y %H:%M:%S",
+                        "%b %d %Y %H:%M:%S",
+                        "%d%b%Y %H:%M:%S",
+                    ]
+                    for fmt in formats_to_try:
+                        try:
+                            dt = datetime.strptime(dt_str, fmt)
+                            break
+                        except (ValueError, TypeError):
+                            continue
+
+                if dt:
+                    order["formatted_time"] = dt.isoformat()
+                else:
+                    logger.error(f"Date parse error for '{dt_str}': All formats failed.")
+                    order["formatted_time"] = dt_str
+        return {
+            "success": True,
+            "count": len(orders),
+            "orders": orders,
+        }
+    except Exception as e:
+        logger.error(f"Get orders error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/straddles")
+async def api_get_straddles():
+    """Get straddles with live calculations"""
+    if not state.db:
+        logger.warning("DB access in /straddles skipped: database is not available (shutting down?).")
+        return {"success": True, "count": 0, "straddles": []}
+
+    try:
+        straddles_from_db = state.db.get_todays_straddles()
+
+        response_straddles = []
+        for trade in straddles_from_db:
+            trade_uid = trade.get("straddle_id") or trade.get("trade_uid")
+            if not trade_uid:
+                continue
+
+            live_config = trade.get("config") or {}
+            try:
+                if float(live_config.get("roll_straddle_div", 0.2)) == 2.0:
+                    live_config["roll_straddle_div"] = 0.2
+                    trade["config"] = live_config
+                    asyncio.get_event_loop().run_in_executor(
+                        None,
+                        state.db.update_straddle_config,
+                        trade_uid,
+                        live_config,
+                        trade.get("sl_points", 0.0),
+                    )
+                    if hasattr(state, "trade_processes") and trade_uid in state.trade_processes:
+                        process = getattr(state, "local_process_refs", {}).get(trade_uid)
+                        command_q = getattr(state, "local_command_queues", {}).get(trade_uid)
+
+                        if process and process.is_alive() and command_q:
+                            command_q.put({
+                                "command": "UPDATE_CONFIG",
+                                "data": live_config,
+                            })
+                        else:
+                            getattr(state, "local_process_refs", {}).pop(trade_uid, None)
+                            getattr(state, "local_command_queues", {}).pop(trade_uid, None)
+                            state.trade_processes.pop(trade_uid, None)
+            except Exception as e:
+                logger.error(f"Failed to hot-patch roll_straddle_div for {trade_uid}: {e}")
+
+            trade_status = str(trade.get("status", "")).strip().upper()
+
+            if trade_status.startswith("CLOSED"):
+                realized_pnl = trade.get("realized_pnl") or 0.0
+                initial_ce_qty = trade.get("initial_ce_quantity", 0)
+                initial_pe_qty = trade.get("initial_pe_quantity", 0)
+
+                if initial_ce_qty == 0 and initial_pe_qty == 0:
+                    initial_ce_qty = trade.get("ce_quantity", 0)
+                    initial_pe_qty = trade.get("pe_quantity", 0)
+
+                num_straddle_units = (initial_ce_qty + initial_pe_qty) / 2.0
+                if num_straddle_units <= 0:
+                    num_straddle_units = 1
+                pnl_per_straddle_calculated = realized_pnl / num_straddle_units
+
+                merged_trade = {
+                    **trade,
+                    "live_pnl": realized_pnl,
+                    "unrealized_pnl": 0.0,
+                    "realized_pnl": realized_pnl,
+                    "pnl_per_lot": pnl_per_straddle_calculated,
+                    "live_net_delta": 0,
+                    "net_gamma": 0,
+                    "net_theta": 0,
+                    "net_vega": 0,
+                    "live_positions": [],
+                    "pts_out": 0,
+                    "points_allowed": 0,
+                    "monitors": None,
+                    "events": trade.get("events", []),
+                }
+                response_straddles.append(merged_trade)
+                continue
+
+            snapshot = state.trade_snapshots.get(trade_uid, {})
+
+            live_positions = snapshot.get("live_positions", [])
+            summary_ce_qty = 0
+            summary_pe_qty = 0
+            unique_strikes = set()
+
+            if live_positions:
+                for pos in live_positions:
+                    unique_strikes.add(pos["strike"])
+                    action = str(pos.get("action", "")).upper()
+                    signed_qty = pos.get("quantity", 0) if action == "SELL" else -pos.get("quantity", 0)
+                    if str(pos.get("option_type", "")).upper() == "CE":
+                        summary_ce_qty += signed_qty
+                    elif str(pos.get("option_type", "")).upper() == "PE":
+                        summary_pe_qty += signed_qty
+
+            if len(unique_strikes) > 1:
+                display_strike = f"{min(unique_strikes)}-{max(unique_strikes)}"
+            elif len(unique_strikes) == 1:
+                display_strike = str(list(unique_strikes)[0])
+            else:
+                display_strike = trade.get("strike")
+
+            points_allowed_from_snapshot = snapshot.get("points_allowed")
+            sanitized_points_allowed = None if points_allowed_from_snapshot == float("inf") else points_allowed_from_snapshot
+
+            merged_trade = {
+                **trade,
+                "strike": display_strike,
+                "ce_quantity": summary_ce_qty,
+                "pe_quantity": summary_pe_qty,
+                "live_pnl": snapshot.get("total_pnl", 0.0),
+                "realized_pnl": snapshot.get("realized_pnl", 0.0),
+                "unrealized_pnl": snapshot.get("unrealized_pnl", 0.0),
+                "pnl_per_lot": snapshot.get("pnl_per_straddle", 0.0),
+                "live_net_delta": snapshot.get("net_delta"),
+                "net_gamma": snapshot.get("net_gamma"),
+                "net_theta": snapshot.get("net_theta"),
+                "net_vega": snapshot.get("net_vega"),
+                "live_positions": snapshot.get("live_positions", []),
+                "pts_out": snapshot.get("pts_out"),
+                "points_allowed": sanitized_points_allowed,
+                "roll_trigger_price": snapshot.get("roll_trigger_price"),
+                "straddle_price_drop_trigger": live_config.get("straddle_price_drop_trigger"), # Expose config
+                "exit_at_straddle": live_config.get("exit_at_straddle"),
+                "straddle_price_drop_pct_sqf": live_config.get("straddle_price_drop_pct_sqf"), # Expose config
+            }
+
+            manager = get_trade_manager(trade_uid)
+            event_bus = get_event_bus()
+
+            if manager:
+                live_config = trade.get("config", {})
+                merged_trade["monitors"] = {
+                    "sl": {
+                        "running": manager.sl_monitor.running,
+                        "interval": manager.sl_monitor.interval,
+                        "sl_bps": manager.sl_monitor.sl_bps,
+                        "sl_points": manager.sl_monitor.sl_points,
+                        "start_time": live_config.get("sl_start_time") or "Trade Start",
+                    },
+                    "hedge": {
+                        "running": manager.hedge_monitor.running,
+                        "interval": manager.hedge_monitor.interval,
+                        "hedge_div": manager.hedge_monitor.hedge_div,
+                        "straddle_div": manager.hedge_monitor.straddle_div,
+                        "start_time": live_config.get("hedge_start_time") or "Trade Start",
+                    },
+                    "roll": {
+                        "running": manager.roll_monitor.running,
+                        "interval": manager.roll_monitor.interval,
+                        "roll_straddle_div": 0.001 if manager.roll_monitor.roll_straddle_div in [2, 2.0, "2", "2.0", 0.2] else manager.roll_monitor.roll_straddle_div,
+                        "start_time": live_config.get("roll_start_time") or "Trade Start",
+                    },
+                    "square_off": {
+                        "running": manager.square_off_monitor.running,
+                        "exit_time": manager.square_off_monitor.exit_time_str or "Not Set",
+                    },
+                }
+
+            if event_bus:
+                trade_events = event_bus.get_trade_events(trade_uid)
+                merged_trade["events"] = [
+                    {
+                        "timestamp": evt.timestamp.strftime("%H:%M:%S"),
+                        "type": evt.event_type,
+                        "priority": EventPriority(evt.priority).name,
+                    }
+                    for evt in reversed(trade_events[-5:])
+                ]
+
+            response_straddles.append(merged_trade)
+
+        return {
+            "success": True,
+            "count": len(response_straddles),
+            "straddles": response_straddles,
+        }
+    except Exception as e:
+        logger.error(f"Get straddles error: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/straddles/active")
+async def api_get_active_straddles():
+    """Get active straddles"""
+    try:
+        straddles = state.db.get_active_straddles()
+        return {
+            "success": True,
+            "count": len(straddles),
+            "straddles": straddles,
+        }
+    except Exception as e:
+        logger.error(f"Get active straddles error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/pnl")
+async def api_get_pnl():
+    """Get live PnL"""
+    try:
+        pnl = get_live_pnl_data()
+        return {
+            "success": True,
+            "data": pnl,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Get PnL error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/straddle/square-off/{trade_uid}", tags=["Straddle Actions"])
+async def api_square_off_straddle(trade_uid: str):
+    """Manual square-off"""
+    try:
+        event_bus = get_event_bus()
+        if not event_bus:
+            raise HTTPException(status_code=503, detail="Event bus not available.")
+
+        trade = state.db.get_straddle_by_id(trade_uid)
+        if not trade:
+            raise HTTPException(status_code=404, detail=f"Trade {trade_uid} not found.")
+
+        trade_status = trade.get("status")
+        if trade_status.startswith("CLOSED"):
+            raise HTTPException(status_code=400, detail=f"Trade {trade_uid} is already closed.")
+
+        logger.info(f"📥 API: Manual SQUARE-OFF request for {trade_uid}")
+
+        await event_bus.emit(
+            event_type="square_off_needed",
+            trade_uid=trade_uid,
+            priority=EventPriority.SQUARE_OFF,
+            data={"manual_trigger": True, "reason": "Manual square-off from API"},
+        )
+
+        return {
+            "success": True,
+            "message": f"Manual square-off for {trade_uid} has been queued.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Square-off API error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/straddle/partial-square-off/{trade_uid}", tags=["Straddle Actions"])
+async def api_partial_square_off_straddle(trade_uid: str, request: PartialSquareOffRequest):
+    """Manual partial square-off of a percentage of the current position."""
+    try:
+        event_bus = get_event_bus()
+        if not event_bus:
+            raise HTTPException(status_code=503, detail="Event bus not available.")
+
+        trade = state.db.get_straddle_by_id(trade_uid)
+        if not trade or trade.get("status") != "ACTIVE":
+            raise HTTPException(status_code=404, detail=f"Trade {trade_uid} not found or not active.")
+
+        logger.info(f"📥 API: Partial square-off request for {trade_uid} ({request.percentage}%)")
+
+        await event_bus.emit(
+            event_type="partial_square_off_needed",
+            trade_uid=trade_uid,
+            priority=EventPriority.SQUARE_OFF,
+            data={"percentage": request.percentage},
+        )
+
+        return {
+            "success": True,
+            "message": f"Partial square-off request for {request.percentage}% of {trade_uid} has been queued.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Partial square-off API error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/straddle/manual-hedge/{trade_uid}", tags=["Straddle Actions"])
+async def api_manual_hedge(trade_uid: str):
+    """Manually triggers a hedge action by directly queueing an event."""
+    try:
+        event_bus = get_event_bus()
+        if not event_bus:
+            raise HTTPException(status_code=503, detail="Event bus not available.")
+
+        trade = state.db.get_straddle_by_id(trade_uid)
+        if not trade:
+            raise HTTPException(status_code=404, detail=f"Trade {trade_uid} not found.")
+
+        trade_status = trade.get("status")
+        if trade_status not in ["ACTIVE", "PARTIAL-SQF"]:
+            raise HTTPException(status_code=400, detail=f"Trade {trade_uid} is not in a hedgeable state (status: {trade_status}).")
+
+        logger.info(f"📥 API: Manual HEDGE EXECUTION request for {trade_uid}")
+
+        snapshot = await get_snapshot_from_service(trade_uid)
+        if snapshot is None:
+            snapshot = state.trade_snapshots.get(trade_uid)
+        if not snapshot:
+            raise HTTPException(status_code=500, detail=f"Could not get fresh snapshot for {trade_uid} after triggering.")
+
+        net_delta = snapshot.get("net_delta", 0.0)
+
+        if abs(net_delta) < 1.0:
+            return {
+                "success": True,
+                "message": f"Manual hedge for {trade_uid} skipped: Net delta ({net_delta:.2f}) is negligible.",
+            }
+
+        target_delta_reduction = -net_delta
+
+        hedge_params = {
+            "net_delta": net_delta,
+            "target_delta_reduction": target_delta_reduction,
+            "trigger_time": get_ist_now(),
+            "manual_trigger": True,
+            "atm_strike": snapshot.get("strike"),
+        }
+
+        await event_bus.emit(
+            event_type="hedge_needed",
+            trade_uid=trade_uid,
+            priority=EventPriority.HEDGE,
+            data=hedge_params,
+        )
+
+        return {
+            "success": True,
+            "message": f"Manual hedge for {trade_uid} has been queued. Target Delta Reduction: {target_delta_reduction:.2f}",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Manual hedge API error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/straddle/manual-roll/{trade_uid}", tags=["Straddle Actions"])
+async def api_manual_roll(trade_uid: str):
+    """Manually triggers a roll action by directly queueing an event."""
+    try:
+        event_bus = get_event_bus()
+        if not event_bus:
+            raise HTTPException(status_code=503, detail="Event bus not available.")
+
+        trade = state.db.get_straddle_by_id(trade_uid)
+        if not trade or trade.get("status") != "ACTIVE":
+            raise HTTPException(status_code=400, detail=f"Trade {trade_uid} is not active.")
+
+        logger.info(f"📥 API: Manual ROLL EXECUTION request for {trade_uid}")
+
+        await event_bus.emit(
+            event_type="roll_needed",
+            trade_uid=trade_uid,
+            priority=EventPriority.ROLL,
+            data={"manual_trigger": True},
+        )
+
+        return {
+            "success": True,
+            "message": f"Manual roll for {trade_uid} has been queued.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Manual roll API error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/straddle/update-config/{trade_uid}", tags=["Straddle Actions"])
+async def api_update_trade_config(trade_uid: str, request: UpdateTradeConfigRequest):
+    """
+    API endpoint to update the configuration of a live trade.
+    Dispatches a command to the corresponding trade process.
+    """
+    # --- FIX: Handle PENDING trades by updating the DB directly ---
+    loop = asyncio.get_event_loop()
+    trade = await loop.run_in_executor(None, state.db.get_straddle_by_id, trade_uid)
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found in DB.")
+
+    if trade.get('status') == 'PENDING':
+        logger.info(f"Updating config for PENDING trade {trade_uid} directly in DB.")
+        
+        # Reconstruct the 'monitors' object from the request
+        # --- FIX: Use .get() for safe access to nested dictionaries ---
+        current_monitors = trade.get('monitors', {})
+        sl_monitor = current_monitors.get('sl', {})
+        hedge_monitor = current_monitors.get('hedge', {})
+        roll_monitor = current_monitors.get('roll', {})
+
+        new_monitors_config = {
+            'sl': {
+                'sl_bps': request.sl_bps, 
+                'start_time': request.sl_start_time, 
+                'interval': sl_monitor.get('interval', 60.0), # Keep existing interval or use default
+                'running': False, 
+                'sl_points': 0
+            },
+            'hedge': {
+                'hedge_div': request.hedge_div, 
+                'straddle_div': request.straddle_div, 
+                'start_time': request.hedge_start_time, 
+                'interval': hedge_monitor.get('interval', 60.0), # Keep existing interval
+                'running': False
+            },
+            'roll': {
+                'roll_straddle_div': request.roll_straddle_div, 
+                'start_time': request.roll_start_time, 
+                'interval': roll_monitor.get('interval', 60.0), # Keep existing interval
+                'running': False
+            },
+            'square_off': {
+                'exit_time': request.exit_time, 
+                'running': False
+            }
+        }
+        
+        trade['monitors'] = new_monitors_config
+        trade['config'].update(request.dict()) # Update the flat config as well
+        
+        await loop.run_in_executor(None, state.db.insert_straddle, trade)
+        
+        return {'success': True, 'message': 'Pending trade configuration updated successfully.'}
+    # --- END FIX ---
+
+    if trade_uid in state.trade_processes:
+        logger.info(f"Dispatching UPDATE_CONFIG command to process for trade {trade_uid}.")
+
+        process = state.local_process_refs.get(trade_uid)
+        command_q = state.local_command_queues.get(trade_uid)
+
+        if not process or not process.is_alive():
+            logger.error(f"Process for trade {trade_uid} is not alive. Cannot update config.")
+
+            state.local_process_refs.pop(trade_uid, None)
+            state.local_command_queues.pop(trade_uid, None)
+            if trade_uid in state.trade_processes:
+                del state.trade_processes[trade_uid]
+
+            raise HTTPException(status_code=404, detail="Trade process is not running.")
+
+        if not command_q:
+            logger.error(f"Command queue for trade {trade_uid} is missing.")
+            raise HTTPException(status_code=404, detail="Trade command queue is not available.")
+
+        command_q.put({
+            'command': 'UPDATE_CONFIG',
+            'data': request.dict()
+        })
+
+
+
+@router.post("/straddle/manual-verify/{trade_uid}", tags=["Straddle Actions"])
+async def api_manual_verify(trade_uid: str):
+    """Manually triggers a full verification and sync for a given trade."""
+    try:
+        logger.info(f"📥 API: Manual verification request for {trade_uid}")
+        result = await manual_sync_trade_orders(trade_uid)
+
+        if result and result.get("success"):
+            return {
+                "success": True,
+                "message": result.get("message", "Manual verification completed."),
+            }
+
+        error_msg = result.get("error", "Manual verification failed.")
+        raise HTTPException(status_code=500, detail=error_msg)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Manual verification API error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/diagnostics/parity-check", tags=["Diagnostics"])
+async def api_check_parity():
+    """
+    Compares the broker's order book with the local database for ALL detected trades.
+    Returns a report of discrepancies between DB quantity and Broker Net quantity.
+    """
+    logger.info("🔍 DIAGNOSTICS: Starting full parity check...")
+
+    loop = asyncio.get_event_loop()
+
+    try:
+        from Connect import XTSConnect
+        import cred
+        import functools
+
+        logger.info("   - Creating a temporary XTS session for parity check...")
+        temp_xt = XTSConnect(cred.API_KEY_I, cred.API_SECRET_I, "WEBAPI")
+        login_resp = await loop.run_in_executor(None, temp_xt.interactive_login)
+        if not login_resp or login_resp.get("type") != "success":
+            raise HTTPException(status_code=503, detail=f"Temporary login failed: {login_resp.get('description')}")
+
+        temp_xt.isInvestorClient = False
+        client_id = getattr(cred, "clientID", login_resp["result"].get("userID"))
+
+        order_book_func = functools.partial(temp_xt.get_order_book, clientID=client_id)
+        response = await loop.run_in_executor(None, order_book_func)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch order book: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not response or response.get("type") != "success":
+        raise HTTPException(status_code=500, detail=f"Broker error: {response}")
+
+    broker_orders = response.get("result", [])
+    logger.info(f"🔍 Fetched {len(broker_orders)} orders from broker.")
+
+    db_straddles_all = await loop.run_in_executor(None, state.db.get_todays_straddles)
+    db_straddles_map = {s.get("trade_uid") or s.get("straddle_id"): s for s in db_straddles_all}
+
+    broker_map = defaultdict(lambda: {"orders": []})
+    uid_pattern = re.compile(r"((?:ny|sx|bn|fn|mc)\d{12}[a-z]?)(?:_.*)?")
+    truncated_to_full_uid = {uid[:-1]: uid for uid in db_straddles_map.keys() if uid and len(uid) > 1}
+
+    for order in broker_orders:
+        ouid = order.get("OrderUniqueIdentifier", "")
+        trade_uid = None
+
+        if ouid:
+            match = uid_pattern.search(ouid)
+            if match:
+                extracted_uid = match.group(1)
+                if extracted_uid in truncated_to_full_uid:
+                    trade_uid = truncated_to_full_uid[extracted_uid]
+                else:
+                    trade_uid = extracted_uid
+
+        if trade_uid:
+            broker_map[trade_uid]["orders"].append(order)
+
+    discrepancies = []
+    all_uids = set(broker_map.keys()) | set(db_straddles_map.keys())
+
+    for uid in all_uids:
+        b_data = broker_map.get(uid, {"orders": []})
+        d_data = db_straddles_map.get(uid, {}) or {}
+
+        d_ce_qty = d_data.get("ce_quantity", 0)
+        d_pe_qty = d_data.get("pe_quantity", 0)
+        d_status = d_data.get("status", "NOT_IN_DB")
+        ce_token = int(d_data.get("ce_token") or 0)
+        pe_token = int(d_data.get("pe_token") or 0)
+
+        net_ce = 0
+        net_pe = 0
+
+        for order in b_data["orders"]:
+            status = str(order.get("OrderStatus", "")).upper()
+            if status not in ["FILLED", "COMPLETE", "TRADED", "EXECUTED"]:
+                continue
+
+            qty = int(order.get("CumulativeQuantity") or order.get("FilledQty") or 0)
+            side = str(order.get("OrderSide", "")).upper()
+            token = int(order.get("ExchangeInstrumentID") or 0)
+
+            signed_qty = qty if side == "SELL" else -qty
+
+            if token == ce_token and ce_token != 0:
+                net_ce += signed_qty
+            elif token == pe_token and pe_token != 0:
+                net_pe += signed_qty
+
+        diff_ce = d_ce_qty - net_ce
+        diff_pe = d_pe_qty - net_pe
+
+        if diff_ce != 0 or diff_pe != 0:
+            discrepancies.append({
+                "trade_uid": uid,
+                "status": d_status,
+                "db_ce": d_ce_qty,
+                "broker_ce": net_ce,
+                "diff_ce": diff_ce,
+                "db_pe": d_pe_qty,
+                "broker_pe": net_pe,
+                "diff_pe": diff_pe,
+            })
+
+    return {
+        "success": True,
+        "total_trades_checked": len(all_uids),
+        "discrepancies": discrepancies,
+    }
+
+
+@router.post("/straddle/cancel-action/{trade_uid}", tags=["Straddle Actions"])
+async def api_cancel_action(trade_uid: str):
+    """Sets a flag to cancel an ongoing long-running action for a trade."""
+    try:
+        trade = state.db.get_straddle_by_id(trade_uid)
+        if not trade:
+            raise HTTPException(status_code=404, detail=f"Trade {trade_uid} not found.")
+
+        if not hasattr(state, "cancellation_flags"):
+            state.cancellation_flags = {}
+        state.cancellation_flags[trade_uid] = True
+
+        logger.warning(f"🛑 API: User requested to CANCEL ongoing action for {trade_uid}")
+
+        return {
+            "success": True,
+            "message": f"Cancellation request for {trade_uid} has been sent. The task will stop at the next checkpoint.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Cancel action API error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def get_positions() -> list:
+    """Helper to get broker positions asynchronously."""
+    client = getattr(state, "xt_i", None)
+    if not client:
+        raise Exception("Interactive client not initialized")
+
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, client.get_position_daywise)
+
+    if response and response.get("type") == "success":
+        result = response.get("result", {})
+        if isinstance(result, dict):
+            return result.get("positionList", []) or result.get("PositionList", [])
+        if isinstance(result, list):
+            return result
+    logger.error(f"Failed to get positions: {response}")
+    return []
+
+
+@router.get("/positions")
+async def api_get_positions():
+    """Get broker positions"""
+    try:
+        positions = await get_positions()
+        return {
+            "success": True,
+            "count": len(positions),
+            "positions": positions,
+        }
+    except Exception as e:
+        logger.error(f"Get positions error: {e}")
+        return {"success": False, "error": str(e)}

@@ -1,0 +1,500 @@
+"""
+API Routes - UPDATED with score preview route, manual fallback values, and DTE score handling
+"""
+
+import asyncio
+import os
+import re
+import math
+import multiprocessing
+import platform
+from pathlib import Path
+from collections import defaultdict
+from datetime import datetime, date,timezone
+from typing import Optional, Dict, Any, Tuple
+import json
+import zmq
+import zmq.asyncio
+import httpx
+import pandas as pd
+from fastapi import APIRouter, HTTPException
+from fastapi import HTTPException, Query
+from fastapi.responses import JSONResponse
+import config
+from utils.logger import logger
+from utils.helpers import get_ist_now
+from market_data import get_option_chain
+from trading.data_client import get_snapshot_from_service
+from trading.builder import build_straddle, manual_sync_trade_orders
+
+from models.schemas import (
+    StraddleRequest,
+    CustomStraddleRequest,
+    ConfigBuildRequest,
+    ConfigScorePreviewRequest,
+    HedgeRequest,
+    SquareOffRequest,
+    PartialSquareOffRequest,
+    UpdateTradeConfigRequest,
+    RollRequest,
+    HealthResponse,
+    APIResponse,
+    StraddleResponse,
+    ConfigBuildResponse,
+    ConfigScorePreviewResponse,
+    OrderBookResponse,
+    PositionsResponse,
+    StraddlesResponse,
+    PnLResponse,
+    OptionChainResponse,
+    PricesResponse,
+    WebSocketMessage,
+    PriceUpdate,
+    PnLUpdate,
+    ErrorResponse,
+)
+
+
+from models.state import state
+from trading.event_bus import (
+    get_event_bus,
+    EventPriority,
+)
+from background.tasks import (
+    broadcast_message,
+    get_live_pnl_data,
+)
+from trading.trade_manager import get_trade_manager
+
+from trading.config_builder import (
+    ALLOWED_CHAIN_SYMBOLS,
+    GAMMA_DATA_FILE,
+    LUT_0916,
+    LUT_0917,
+    LUT_0918,
+    LUT_0919,
+    LUT_0920,
+    _resolve_data_file_path,
+    _compute_score_payload,
+    build_with_config,
+)
+
+
+import inspect
+
+
+
+async def _get_chain_for_scoring(symbol: str):
+    """
+    Returns the latest option chain.
+
+    1. Try the published chain.
+    2. If unavailable, request MarketData over ZMQ.
+    """
+
+    symbol = symbol.upper().strip()
+
+    published = None
+
+    if hasattr(state, "get_published_option_chain"):
+        published = state.get_published_option_chain(symbol)
+
+    elif hasattr(state, "published_option_chains"):
+        published = state.published_option_chains.get(symbol)
+
+    if published:
+        logger.info(
+            "Using published option chain for %s",
+            symbol,
+        )
+        return published
+
+    logger.warning(
+        "Published chain unavailable for %s. Requesting MarketData.",
+        symbol,
+    )
+
+    req = None
+
+    try:
+        ctx = zmq.asyncio.Context.instance()
+
+        req = ctx.socket(zmq.REQ)
+
+        req.setsockopt(zmq.LINGER, 0)
+        req.setsockopt(zmq.RCVTIMEO, 3000)
+        req.setsockopt(zmq.SNDTIMEO, 3000)
+
+        req.connect(
+            f"tcp://127.0.0.1:{getattr(config,'ZMQ_MARKETDATA_REQ_PORT',5560)}"
+        )
+
+        await req.send_json({
+            "command": "get_option_chain",
+            "payload": {
+                "symbol": symbol,
+                "strike_range": 15,
+            }
+        })
+
+        reply = await req.recv_json()
+
+        if not reply.get("success"):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Unable to fetch option chain for {symbol}"
+            )
+
+        chain = reply.get("data")
+
+        if not chain:
+            raise HTTPException(
+                status_code=503,
+                detail=f"No option chain returned for {symbol}"
+            )
+
+        return chain
+
+    except HTTPException:
+        raise
+
+    except Exception:
+        logger.exception("Failed getting option chain for %s", symbol)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Option chain unavailable for {symbol}"
+        )
+
+    finally:
+        if req is not None:
+            try:
+                req.close()
+            except Exception:
+                pass
+
+
+async def _compute_config_score(
+    symbol: str,
+    manual_latest_idv=None,          # currently unused
+    manual_historical_idv=None,
+    manual_prev_day_straddle=None,
+    tp_points=None,
+    tp_bps=None,
+    manual_spot_price=None,
+    straddle_price_drop_trigger=None,
+    exit_at_straddle=None,
+    straddle_price_drop_pct_sqf=None,
+    use_live_spot_for_og: bool=False,
+):
+
+    chain_data = await _get_chain_for_scoring(symbol)
+
+    if not chain_data:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No option chain available for {symbol}",
+        )
+
+    logger.info("=" * 120)
+    logger.info("[PREVIEW CHAIN DATA]")
+
+    logger.info(f"Keys : {list(chain_data.keys())}")
+    logger.info(f"ATM  : {chain_data.get('atm')}")
+    logger.info(f"Rows : {len(chain_data.get('chain', []))}")
+
+    logger.info("=" * 120)
+
+    if "chain" not in chain_data:
+        raise HTTPException(
+            status_code=503,
+            detail="Invalid option chain payload.",
+        )
+
+    atm_row = next(
+        (
+            r for r in chain_data.get("chain", [])
+            if r.get("is_atm")
+        ),
+        None,
+    )
+
+    if atm_row is None:
+        atm = chain_data.get("atm")
+        atm_row = next(
+            (
+                r for r in chain_data.get("chain", [])
+                if r.get("strike") == atm
+            ),
+            None,
+        )
+
+    if atm_row is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ATM row not found."
+        )
+
+    ce_iv = float(atm_row.get("ce_iv") or 0.0)
+    pe_iv = float(atm_row.get("pe_iv") or 0.0)
+
+    live_iv = (
+        (ce_iv + pe_iv) / 2.0
+        if (ce_iv > 0 or pe_iv > 0)
+        else 0.0
+    )
+
+    live_straddle = (
+        float(atm_row.get("ce_ltp") or 0.0)
+        + float(atm_row.get("pe_ltp") or 0.0)
+    )
+
+    logger.info("=" * 120)
+    logger.info("[PREVIEW IV DEBUG]")
+    logger.info(f"ATM Strike      : {atm_row.get('strike')}")
+    logger.info(f"CE IV           : {ce_iv}")
+    logger.info(f"PE IV           : {pe_iv}")
+    logger.info(f"Computed LiveIV : {live_iv}")
+    logger.info(f"CE LTP          : {atm_row.get('ce_ltp')}")
+    logger.info(f"PE LTP          : {atm_row.get('pe_ltp')}")
+
+    logger.info("=" * 120)
+    logger.info("[FULL PREVIEW ATM ROW]")
+
+    for k, v in atm_row.items():
+        logger.info(f"{k:<35} = {v}")
+
+    logger.info("=" * 120)
+
+    logger.info("=" * 120)
+
+
+    return _compute_score_payload(
+        symbol=symbol,
+        live_iv=live_iv,
+        live_straddle=live_straddle,
+        chain_data=chain_data,
+        manual_historical_idv=manual_historical_idv,
+        manual_prev_day_straddle=manual_prev_day_straddle,
+        tp_points=tp_points,
+        tp_bps=tp_bps,
+        manual_spot_price=manual_spot_price,
+        straddle_price_drop_trigger=straddle_price_drop_trigger,
+        exit_at_straddle=exit_at_straddle,
+        straddle_price_drop_pct_sqf=straddle_price_drop_pct_sqf,
+        use_live_spot_for_og=use_live_spot_for_og,
+    )
+router = APIRouter()
+@router.get("/health")
+async def health():
+
+    event_bus = get_event_bus()
+
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "db_status": "connected" if state.db else "disconnected",
+        "db_connected": state.db is not None,
+        "socket_connected": state.socket_connected,
+        "event_bus": "active" if event_bus else "inactive",
+        "cached_prices": len(state.prices) if state.prices is not None else 0,
+        "subscribed_tokens": len(state.subscribed_tokens),
+        "active_straddles": len(state.db.get_active_straddles()) if state.db else 0,
+        "resolved_paths": {
+            "gamma_data_file": _resolve_data_file_path(GAMMA_DATA_FILE),
+            "lut_0916": _resolve_data_file_path(LUT_0916),
+            "lut_0917": _resolve_data_file_path(LUT_0917),
+            "lut_0918": _resolve_data_file_path(LUT_0918),
+            "lut_0919": _resolve_data_file_path(LUT_0919),
+            "lut_0920": _resolve_data_file_path(LUT_0920),
+        },
+    }
+
+
+
+@router.get("/option-chain/{symbol}")
+async def api_get_option_chain(symbol: str, strike_range: int = Query(15, ge=1, le=50)):
+    """Get freshest option chain from the single published source of truth.
+
+    Flow:
+    1. Normalize and validate symbol.
+    2. Return published chain immediately if available.
+    3. If unavailable, trigger a one-shot marketdata build over ZMQ.
+    4. Return the ZMQ chain only as a fallback bootstrap response.
+    """
+
+    def _iso_ms(dt):
+        if dt is None:
+            return None
+        if isinstance(dt, str):
+            return dt
+        if getattr(dt, "tzinfo", None) is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat(timespec="milliseconds")
+
+    symbol = (symbol or "").strip().upper()
+
+    if symbol not in ALLOWED_CHAIN_SYMBOLS:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": f"Unsupported option-chain symbol: {symbol}. Allowed: {sorted(ALLOWED_CHAIN_SYMBOLS)}"
+            }
+        )
+
+    req = None
+
+    try:
+        # 1) Prefer the single source of truth already published in app state.
+        published_chain = state.get_published_option_chain(symbol)
+
+        if published_chain:
+            logger.info(
+                "API: Returning published option chain for %s (published_at=%s)",
+                symbol,
+                published_chain.get("published_at")
+            )
+            return {
+                "success": True,
+                "data": published_chain
+            }
+
+        logger.warning("API: No published chain for %s. Triggering marketdata build.", symbol)
+
+        # 2) Fallback bootstrap via ZMQ request to marketdata service.
+        ctx = zmq.asyncio.Context.instance()
+        req = ctx.socket(zmq.REQ)
+        req.setsockopt(zmq.LINGER, 0)
+        req.setsockopt(zmq.RCVTIMEO, 3000)
+        req.setsockopt(zmq.SNDTIMEO, 3000)
+
+        req.connect(f"tcp://127.0.0.1:{getattr(config, 'ZMQ_MARKETDATA_REQ_PORT', 5560)}")
+
+        await req.send_json({
+            "command": "get_option_chain",
+            "payload": {
+                "symbol": symbol,
+                "strike_range": strike_range
+            }
+        })
+
+        reply = await req.recv_json()
+
+        logger.info(
+            "[API-ZMQ-RAW] %s => %s",
+            symbol,
+            json.dumps(reply, default=str)[:4000]
+        )
+
+        if reply.get("success") and reply.get("data"):
+            zmq_chain = reply["data"]
+
+            if isinstance(zmq_chain, dict):
+                if not zmq_chain.get("symbol"):
+                    zmq_chain["symbol"] = symbol
+
+                if zmq_chain.get("published_at") is not None:
+                    zmq_chain["published_at"] = _iso_ms(zmq_chain.get("published_at"))
+
+            logger.info(
+                "API: Returning ZMQ fallback option chain for %s (published_at=%s)",
+                symbol,
+                zmq_chain.get("published_at") if isinstance(zmq_chain, dict) else None
+            )
+
+            return {
+                "success": True,
+                "data": zmq_chain
+            }
+
+        logger.warning("API: Marketdata returned no usable chain for %s", symbol)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "error": f"Option chain for {symbol} unavailable from marketdata service."
+            }
+        )
+
+    except zmq.error.Again as zmq_timeout:
+        logger.warning("⚠️ ZMQ option-chain timeout for %s: %s", symbol, zmq_timeout)
+        return JSONResponse(
+            status_code=504,
+            content={
+                "success": False,
+                "error": f"Timed out fetching option chain for {symbol} from marketdata service."
+            }
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"Option chain API error for {symbol}: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": str(e)
+            }
+        )
+
+    finally:
+        if req is not None:
+            try:
+                req.close()
+            except Exception:
+                pass
+    
+@router.post("/straddle/sell")
+async def api_sell_straddle(request: StraddleRequest):
+    """Sell straddle - simple manual entry"""
+    try:
+        now = datetime.now()
+
+        logger.info(f"📥 API: Manual straddle sell request for {request.symbol}")
+
+        default_config = {
+            "symbol": request.symbol,
+            "size": request.lots,
+            "entry_time": None,
+            "exit_time": None,
+            "sl_bps": 14,
+            "hedge_div": 57,
+            "straddle_div": 4,
+            "roll_straddle_div": 0.001,
+            "hedge_monitor_interval": request.hedge_monitor_interval,
+            "sl_monitor_interval": request.sl_monitor_interval,
+            "roll_monitor_interval": request.roll_monitor_interval,
+            "roll_flag_check_interval": 60.0,
+            "hedge_frac": 1.0,
+            "straddle_price_drop_trigger": 0.0,
+            "straddle_price_monitor_interval": 10.0,
+            "hedge_start_time": None,
+            "sl_start_time": None,
+            "roll_start_time": None,
+            "order_lots_per_call": request.order_lots_per_call,
+        }
+        if "SENSEX" in request.symbol.upper():
+            default_config["buy_buffer"] = 6
+            default_config["sell_buffer"] = 6
+        else:
+            default_config["buy_buffer"] = 2
+            default_config["sell_buffer"] = 2
+
+        logger.info("=" * 100)
+        logger.info(f"REQUEST TYPE : {type(request)}")
+        logger.info(f"REQUEST MODEL FIELDS : {list(request.model_fields.keys()) if hasattr(request, "model_fields") else list(request.__class__.model_fields.keys())}")
+        logger.info("=" * 100)
+
+        default_config["entry_at_straddle"] = request.entry_at_straddle
+        default_config["exit_at_straddle"] = request.exit_at_straddle
+
+        build_result = await build_straddle(
+            symbol=request.symbol,
+            lots=request.lots,
+            trade_uid=None,
+            delta_neutral=request.delta_neutral,
+            trade_config=default_config,
+        )
+

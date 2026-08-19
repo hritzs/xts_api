@@ -10,9 +10,9 @@ from typing import Dict, List
 import os
 
 from utils.logger import logger
-from core.state     import TRADE_STATES
+from core.state import TRADE_STATES
 from core.shared_memory import PriceSHM, ChainSHM
-from core.zmq_bus   import TickSubscriber
+from core.zmq_bus import TickSubscriber
 
 
 _price_shm: PriceSHM = None
@@ -27,9 +27,9 @@ LATEST_CHAINS: Dict[str, dict] = {}   # symbol → chain dict, updated each tick
 
 def _init_tick_engine():
     global _price_shm, _tick_subscriber, _process_pool
-    _price_shm       = PriceSHM(create=False)
+    _price_shm = PriceSHM(create=False)
     _tick_subscriber = TickSubscriber()
-    _process_pool    = ProcessPoolExecutor(max_workers=max(1, os.cpu_count() - 1))
+    _process_pool = ProcessPoolExecutor(max_workers=max(1, os.cpu_count() - 1))
     logger.info("✅ Tick engine initialized")
 
 
@@ -58,7 +58,7 @@ async def tick_engine_loop():
             logger.info("⚡ Tick engine cancelled")
             break
         except Exception as e:
-            logger.error(f"❌ Tick engine error: {e}")
+            logger.error(f"❌ Tick engine error: {e}", exc_info=True)
             await asyncio.sleep(0.1)
 
 
@@ -78,6 +78,20 @@ def _on_tick(symbol: str):
     if not chain:
         return
 
+    # Debug exact row after SHM read
+    if symbol == "NIFTY":
+        row_24150 = next(
+            (r for r in chain.get("chain", []) if r.get("strike") == 24150),
+            None
+        )
+        if row_24150:
+            logger.info(
+                f"[CHAIN-READ] {symbol} 24150 | "
+                f"ce_iv={row_24150.get('ce_iv')} pe_iv={row_24150.get('pe_iv')} "
+                f"ce_ltp={row_24150.get('ce_ltp')} pe_ltp={row_24150.get('pe_ltp')} "
+                f"syn={chain.get('synthetic_spot')} fut={chain.get('fut_ltp')}"
+            )
+
     LATEST_CHAINS[symbol] = chain
 
     # Update TRADE_STATES LTPs for relevant trades
@@ -85,9 +99,11 @@ def _on_tick(symbol: str):
     for trade_uid, state in TRADE_STATES.items():
         if state.get('symbol', '').upper() == symbol.upper():
             state['spot'] = fut_ltp
+
             # Update CE/PE LTPs from price SHM
             ce_tok = state.get('ce_token')
             pe_tok = state.get('pe_token')
+
             if ce_tok and _price_shm:
                 state['ce_ltp'] = _price_shm.get(int(ce_tok))
             if pe_tok and _price_shm:
