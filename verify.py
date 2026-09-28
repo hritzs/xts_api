@@ -28,9 +28,8 @@ def verify_imports():
         print("   ✅ utils.helpers")
 
         print("\n5. Market Data...")
-        from market_data import socket_client, socket_callbacks
+        from market_data import socket_callbacks
         from trading import chain_provider
-        print("   ✅ market_data.socket_client")
         print("   ✅ market_data.socket_callbacks")
         print("   ✅ trading.chain_provider")
 
