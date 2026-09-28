@@ -42,6 +42,7 @@ from trading.chain_provider import (
     get_spot_details,
     SYMBOL_CONFIG,
     _extract_depth_from_quote,
+    _extract_depth_levels,
 )
 from market_data.tasks import (
     update_option_chain_cache_loop,
@@ -403,6 +404,8 @@ def _normalize_1502_quote(data: dict) -> dict:
         "depth_available": bool(
             ltp > 0 or bid_price > 0 or ask_price > 0 or bids_list or asks_list
         ),
+        "bids": _extract_depth_levels(bids_list),
+        "asks": _extract_depth_levels(asks_list),
     }
     return normalized
 
@@ -443,6 +446,8 @@ def on_message1502_json_full(data):
             "bid_qty": _safe_int(depth.get("bid_qty"), 0),
             "ask_qty": _safe_int(depth.get("ask_qty"), 0),
             "depth_available": bool(depth.get("depth_available")),
+            "bids": depth.get("bids") or None,
+            "asks": depth.get("asks") or None,
             "source_1502": True,
         })
         _refresh_published_chain_quotes_for_token(token)
@@ -532,6 +537,7 @@ async def process_and_broadcast_market_data_queue():
                     token_int = int(token)
                     depth = _extract_depth_from_quote(msg_data)
                     depth["quote_ts"] = get_ist_now().isoformat()
+                    depth["_ts"] = time.time()
                     _state_set_quote(token_int, depth)
                     quote_batch[token_int] = depth
 
@@ -557,6 +563,8 @@ async def process_and_broadcast_market_data_queue():
                             "best_ask": ask_val,
                             "bid_qty": depth.get("bid_qty"),
                             "ask_qty": depth.get("ask_qty"),
+                            "bids": depth.get("bids") or [],
+                            "asks": depth.get("asks") or [],
                             "ltp": depth.get("ltp"),
                             "quote_ts": depth.get("quote_ts"),
                             "depth_available": True,

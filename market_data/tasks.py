@@ -21,6 +21,10 @@ from utils.logger import logger
 from models.state import state
 from utils.greeks import calculate_all_greeks, calculate_greeks_from_iv
 from utils.helpers import calculate_dte, get_ist_now
+from trading.depth_aware_fast_mtm import (
+    exit_price as depth_exit_price,
+    exit_mtm as depth_exit_mtm,
+)
 
 from trading.chain_provider import (
     get_option_chain as build_get_option_chain,
@@ -1303,6 +1307,10 @@ async def _create_snapshot_for_trade(
                             if ltp > 0:
                                 leg_mtm = (ltp - entry_price) * abs(net_open_qty)
 
+                    exit_info = depth_exit_price(token, net_open_qty, ltp=ltp)
+                    exit_px   = exit_info['price']
+                    leg_exit_mtm = depth_exit_mtm(entry_price, net_open_qty, exit_px)
+
                     strike, option_type = None, None
                     if option_chain and option_chain.get('chain'):
                         for row in option_chain['chain']:
@@ -1318,6 +1326,9 @@ async def _create_snapshot_for_trade(
                         'entry_price':  entry_price,
                         'ltp':          ltp,
                         'leg_mtm_pnl':  leg_mtm,
+                        'exit_price':   exit_px,
+                        'exit_price_source': exit_info['source'],
+                        'exit_mtm_pnl': leg_exit_mtm,
                         'strike':       strike,
                         'option_type':  option_type,
                         'token_pnl': (
@@ -1344,6 +1355,10 @@ async def _create_snapshot_for_trade(
                             'entry_price': entry_price,
                             'ltp':         ltp,
                             'pnl':         leg_mtm,
+                            'exit_price':  exit_px,
+                            'exit_price_source': exit_info['source'],
+                            'exit_depth_filled_qty': exit_info['depth_filled_qty'],
+                            'exit_mtm':    leg_exit_mtm,
                             'iv': 0.0, 'delta': 0.0,
                             'gamma': 0.0, 'theta': 0.0, 'vega': 0.0
                         })
@@ -1486,10 +1501,15 @@ async def _create_snapshot_for_trade(
                     'option_type': otype, 'quantity': qty,
                     'action': 'SELL', 'symbol': symbol_upper
                 })
+                exit_info_fb = depth_exit_price(key, qty, ltp=ltp_fb)
                 live_positions.append({
                     'token': key, 'strike': full_trade_data['strike'],
                     'option_type': otype, 'quantity': qty, 'action': 'SELL',
                     'entry_price': entry, 'ltp': ltp_fb, 'pnl': pnl_fb,
+                    'exit_price': exit_info_fb['price'],
+                    'exit_price_source': exit_info_fb['source'],
+                    'exit_depth_filled_qty': exit_info_fb['depth_filled_qty'],
+                    'exit_mtm': depth_exit_mtm(entry, qty, exit_info_fb['price']),
                     'iv':    g_data.get('iv', 0.0),
                     'delta': pg.net_delta,
                     'gamma': pg.net_gamma,
@@ -1747,6 +1767,7 @@ async def _create_snapshot_for_trade(
                 + full_trade_data.get('pe_quantity', 0)
             ),
             'live_positions':     live_positions,
+            'exit_mtm_total':     sum(p.get('exit_mtm', 0.0) for p in live_positions),
         }
 
         if not hasattr(state, 'trade_snapshots'):
@@ -1761,6 +1782,7 @@ async def _create_snapshot_for_trade(
                 f"{p['strike']} {p['option_type']}"
                 f" | Entry:{p['entry_price']:.2f} LTP:{p['ltp']:.2f}"
                 f" PnL:₹{p['pnl']:.2f}"
+                f" Exit:{p.get('exit_price', 0):.2f}({p.get('exit_price_source', 'none')})"
                 f" IV:{p.get('iv', 0):.2f}% Δ:{p.get('delta', 0):.2f}"
             )
         log_msg = (

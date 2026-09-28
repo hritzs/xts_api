@@ -176,6 +176,34 @@ def _extract_ltp_from_quote(quote: Dict) -> float:
         return 0.0
 
 
+DEPTH_LEVELS = 5
+
+
+def _extract_depth_levels(levels, max_levels: int = DEPTH_LEVELS) -> List[Dict]:
+    """
+    Normalise an XTS Bids/Asks list into up to `max_levels` levels of
+    {price, qty, orders}, keeping feed order and skipping empty levels.
+    """
+    out: List[Dict] = []
+    if not isinstance(levels, list):
+        return out
+    for lvl in levels:
+        if len(out) >= max_levels:
+            break
+        if not isinstance(lvl, dict):
+            continue
+        price = _safe_float(lvl.get("Price"), 0.0)
+        qty = _safe_int(lvl.get("Size"), 0)
+        if price <= 0 or qty <= 0:
+            continue
+        out.append({
+            "price": price,
+            "qty": qty,
+            "orders": _safe_int(lvl.get("TotalOrders"), 0),
+        })
+    return out
+
+
 def _extract_depth_from_quote(quote: dict) -> Dict:
     touchline = quote.get("Touchline", {}) or {}
     bids_list = quote.get("Bids", []) or []
@@ -237,6 +265,8 @@ def _extract_depth_from_quote(quote: dict) -> Dict:
         "bid_qty": bid_qty if bid_qty > 0 else None,
         "ask_qty": ask_qty if ask_qty > 0 else None,
         "depth_available": depth_available,
+        "bids": _extract_depth_levels(bids_list),
+        "asks": _extract_depth_levels(asks_list),
         "raw_quote": quote,
     }
  
