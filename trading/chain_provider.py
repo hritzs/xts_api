@@ -333,6 +333,8 @@ def get_ltp(token: int, exchange_segment: int = config.EXCHANGE_NSEFO, ignore_ca
         try:
             sub_code = 1501 if is_cash_segment else 1502
             xt_m.send_subscription(instruments, sub_code)
+            if md_socket:
+                md_socket.track_subscription(instruments, sub_code)
             state.add_subscription(token)
         except Exception as sub_e:
             logger.warning(f"⚠️ LTP subscription warning for {token}: {sub_e}")
@@ -1452,18 +1454,18 @@ def _build_new_chain(symbol: str, strike_range: int, target_expiry: Optional[str
             if nse_fo_instruments:
                 xt_m.send_subscription(nse_fo_instruments, config.MESSAGE_CODE_LTP)
                 xt_m.send_subscription(nse_fo_instruments, 1502)
-                if state.socket_connected and md_socket:
+                if md_socket:
                     md_socket.send_subscription(nse_fo_instruments, config.MESSAGE_CODE_LTP)
                     md_socket.send_subscription(nse_fo_instruments, 1502)
 
             if bse_fo_instruments:
                 xt_m.send_subscription(bse_fo_instruments, 1501)
-                if state.socket_connected and md_socket:
+                if md_socket:
                     md_socket.send_subscription(bse_fo_instruments, 1501)
 
             if cash_instruments:
                 xt_m.send_subscription(cash_instruments, 1501)
-                if state.socket_connected and md_socket:
+                if md_socket:
                     md_socket.send_subscription(cash_instruments, 1501)
 
             for instr in unique_instruments:

@@ -1073,7 +1073,23 @@ async def main():
     xts_token = response_m["result"]["token"]
     user_id = response_m["result"]["userID"]
 
-    md_socket = MDSocket_io(xts_token, user_id)
+    def _refresh_md_token():
+        resp = xt_m.marketdata_login()
+        if resp.get("type") != "success":
+            raise RuntimeError(f"Market data re-login failed: {resp.get('description', 'Unknown')}")
+        return resp["result"]["token"], resp["result"]["userID"]
+
+    def _in_market_hours() -> bool:
+        now = get_ist_now()
+        return now.weekday() < 5 and (9, 15) <= (now.hour, now.minute) < (15, 30)
+
+    md_socket = MDSocket_io(
+        xts_token,
+        user_id,
+        rest_client=xt_m,
+        token_refresher=_refresh_md_token,
+        stall_check=_in_market_hours,
+    )
 
     md_socket.on_connect = on_socket_connect
     md_socket.on_disconnect = on_socket_disconnect
@@ -1098,10 +1114,10 @@ async def main():
 
     def _socket_thread():
         try:
-            logger.info("🔗 Socket thread connecting...")
-            md_socket.connect()
+            logger.info("🔗 Socket thread connecting (auto-reconnect enabled)...")
+            md_socket.run_forever()
         except Exception as e:
-            logger.error(f"❌ Socket thread error: {e}")
+            logger.error(f"❌ Socket thread error: {e}", exc_info=True)
 
     threading.Thread(target=_socket_thread, daemon=True).start()
     logger.info("✅ Socket thread launched")
@@ -1134,7 +1150,7 @@ async def main():
 
         if md_socket:
             try:
-                md_socket.disconnect()
+                md_socket.stop()
             except Exception:
                 pass
 

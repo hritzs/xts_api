@@ -58,7 +58,6 @@ def check_structure():
         'database/db_manager.py',
         'market_data/__init__.py',
         'market_data/data_client.py',
-        'market_data/socket_client.py',
         'market_data/socket_callbacks.py',
         'market_data/chain_provider.py',
         'models/__init__.py',
